@@ -48,6 +48,9 @@ PR & testing guidance
 - Small changes: keep them limited to the hook and visualizer and ensure they don't change the public hook contract.
 - When introducing native deps (audio) document required manual steps in the PR (e.g., run `expo prebuild`, rebuild native, or how to run with a custom dev client).
 
+Workflow shortcuts
+- **"commit and document"**: Commit changes with a concise, comprehensive message, then read and update the EXECUTIVE_PLAN.md to reflect current progress and status.
+
 Files to inspect for most tasks
 - `App.js` — main UI, placeholder audio hook, visualizer.
 - `index.js` — root registration.
