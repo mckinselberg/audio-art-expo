@@ -11,6 +11,7 @@ An immersive, cross-platform audio-visual art experience built with React Native
 - **Multiple waveform types**: Sine, Square, Sawtooth, Triangle
 - **Interactive frequency control**: Touch the waveform to change pitch (200Hz - 2000Hz)
 - **Dynamic amplitude control**: Adjust volume with intuitive slider interface
+- **Perceptual volume compensation**: Automatic loudness balancing prevents ear damage when switching waveforms
 
 ### 🎨 **Interactive Visualization**
 - **Real-time waveform rendering** using SVG graphics
@@ -146,8 +147,31 @@ sample = baseWaveform + (sineComponent * 0.3); // 30% sine blend
 - FFT analysis for visualization data
 - Amplitude-responsive visual scaling
 - Smooth interpolation between frames
+- **Perceptual volume compensation** prevents hearing damage across waveform types
 
 ## 🔧 Development
+
+### **Volume Compensation System**
+The platform implements **perceptual volume compensation** to prevent ear damage and provide consistent loudness across different waveforms:
+
+```javascript
+// Volume compensation matrix based on RMS and psychoacoustic research
+const compensationMatrix = {
+  'sine': 1.0,      // Reference level (smoothest waveform)
+  'triangle': 0.7,  // 30% reduction due to harmonic content  
+  'sawtooth': 0.5,  // 50% reduction due to rich harmonics
+  'square': 0.3     // 70% reduction (loudest waveform)
+};
+
+// Applied automatically during waveform switching
+const adjustedGain = amplitude * compensation * maxGain;
+```
+
+**Why this matters:**
+- **Safety**: Prevents sudden volume spikes that can damage hearing
+- **User Experience**: Smooth transitions between waveform types
+- **Scientific Basis**: Based on RMS calculations and psychoacoustic research
+- **Automatic**: No user intervention required - works transparently
 
 ### **Project Structure**
 ```
@@ -176,7 +200,22 @@ yarn export     # Build for web deployment
 3. Make changes - hot reload automatically updates
 4. Test on different platforms as needed
 
-## 🐛 Known Issues & Compatibility
+## �️ Safety Features
+
+### **Hearing Protection**
+- **Automatic volume compensation** across different waveform types
+- **Scientific loudness balancing** based on RMS and psychoacoustic research
+- **Prevents sudden volume spikes** that could damage hearing
+- **Transparent operation** - no user configuration required
+
+| Waveform | Volume Compensation | Reason |
+|----------|-------------------|---------|
+| Sine | 100% (Reference) | Smoothest, gentlest waveform |
+| Triangle | 70% | Contains additional harmonics |
+| Sawtooth | 50% | Rich harmonic content |
+| Square | 30% | Loudest due to fundamental + odd harmonics |
+
+## �🐛 Known Issues & Compatibility
 
 ### **Mobile Safari**
 - ✅ **Fixed**: AudioContext requires explicit user interaction

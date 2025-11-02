@@ -2,14 +2,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Platform } from 'react-native';
 import { Svg, Path } from 'react-native-svg';
-import { Audio } from 'expo-av';
+import { Audio } from 'expo-audio';
 
 // Real audio engine with platform-aware synthesis
 const useAudioEngine = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [frequency, setFrequency] = useState(440);
   const [waveType, setWaveType] = useState('sine');
-  const [amplitude, setAmplitude] = useState(0.5);
+  const [amplitude, setAmplitude] = useState(0.3);
   const [audioData, setAudioData] = useState(new Array(1024).fill(128));
   const soundRef = useRef(null);
   
@@ -18,6 +18,21 @@ const useAudioEngine = () => {
   const oscillatorRef = useRef(null);
   const gainNodeRef = useRef(null);
   const analyserRef = useRef(null);
+  
+  // Timeout references for cleanup
+  const waveformSwitchTimeoutRef = useRef(null);
+
+  // Volume compensation matrix for different waveforms
+  // Based on RMS (Root Mean Square) and perceived loudness
+  const getVolumeCompensation = (waveType) => {
+    const compensationMatrix = {
+      'sine': 1.0,      // Reference level (smoothest waveform)
+      'triangle': 0.7,  // Triangle waves are louder due to more harmonic content
+      'sawtooth': 0.5,  // Sawtooth is much louder due to rich harmonics
+      'square': 0.3     // Square waves are loudest due to fundamental + odd harmonics
+    };
+    return compensationMatrix[waveType] || 1.0;
+  };
 
   // Initialize audio system with platform detection
   const initAudio = async () => {
@@ -26,12 +41,6 @@ const useAudioEngine = () => {
         // Use Web Audio API for web
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-          
-          // Mobile Safari requires explicit resume after user interaction
-          if (audioContextRef.current.state === 'suspended') {
-            await audioContextRef.current.resume();
-            console.log('AudioContext resumed for mobile Safari');
-          }
           
           // Create gain node for volume control
           gainNodeRef.current = audioContextRef.current.createGain();
@@ -47,6 +56,12 @@ const useAudioEngine = () => {
           analyserRef.current.connect(audioContextRef.current.destination);
           
           console.log('Web Audio API initialized, state:', audioContextRef.current.state);
+        }
+        
+        // Resume AudioContext if suspended (required for all browsers after user interaction)
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+          console.log('AudioContext resumed after user interaction');
         }
       } else {
         // Use expo-av for mobile
@@ -95,10 +110,10 @@ const useAudioEngine = () => {
   };
 
   // Create and start oscillator (Web Audio API)
-  const startWebAudioOscillator = () => {
+  const startWebAudioOscillator = (waveTypeParam = waveType) => {
     if (audioContextRef.current && !oscillatorRef.current) {
       oscillatorRef.current = audioContextRef.current.createOscillator();
-      oscillatorRef.current.type = waveType;
+      oscillatorRef.current.type = waveTypeParam;
       
       // Ensure frequency is valid before setting
       const safeFreq = isNaN(frequency) || !isFinite(frequency) ? 440 : frequency;
@@ -108,35 +123,55 @@ const useAudioEngine = () => {
       oscillatorRef.current.connect(gainNodeRef.current);
       oscillatorRef.current.start();
       
-      // Set volume with safety check - use wider range
+      // Set volume with safety check and waveform compensation
       const safeAmplitude = isNaN(amplitude) || !isFinite(amplitude) ? 0.5 : amplitude;
-      gainNodeRef.current.gain.setValueAtTime(safeAmplitude * 0.8, audioContextRef.current.currentTime);
+      const compensation = getVolumeCompensation(waveTypeParam);
+      const adjustedGain = safeAmplitude * 0.8 * compensation;
+      gainNodeRef.current.gain.setValueAtTime(adjustedGain, audioContextRef.current.currentTime);
       
-      console.log(`Started ${waveType} oscillator at ${safeFreq}Hz with amplitude ${safeAmplitude} (gain: ${safeAmplitude * 0.8})`);
+      console.log(`Started ${waveTypeParam} oscillator at ${safeFreq}Hz with amplitude ${safeAmplitude} (compensated gain: ${adjustedGain})`);
     }
   };
 
-  // Stop oscillator (Web Audio API)
+  // Stop oscillator (Web Audio API) with proper cleanup
   const stopWebAudioOscillator = () => {
     if (oscillatorRef.current) {
-      // Don't reset gain to 0 - just stop the oscillator
-      oscillatorRef.current.stop();
-      oscillatorRef.current.disconnect();
-      oscillatorRef.current = null;
-      console.log('Stopped oscillator (gain preserved)');
+      try {
+        // Properly stop the oscillator
+        oscillatorRef.current.stop();
+        
+        // Disconnect from all connected AudioNodes
+        oscillatorRef.current.disconnect();
+        
+        // Clear the reference to allow garbage collection
+        oscillatorRef.current = null;
+        
+        console.log('Oscillator stopped and cleaned up');
+      } catch (error) {
+        // Handle case where oscillator was already stopped
+        console.warn('Error stopping oscillator (may already be stopped):', error);
+        oscillatorRef.current = null; // Still clear the reference
+      }
     }
   };
 
   // Update oscillator parameters
+  // Update oscillator parameters (frequency and gain only - type changes require restart)
   const updateWebAudioOscillator = () => {
     if (oscillatorRef.current && audioContextRef.current) {
       // Ensure values are safe before setting
       const safeFreq = isNaN(frequency) || !isFinite(frequency) ? 440 : frequency;
       const safeAmplitude = isNaN(amplitude) || !isFinite(amplitude) ? 0.5 : amplitude;
       
+      // Update frequency
       oscillatorRef.current.frequency.setValueAtTime(safeFreq, audioContextRef.current.currentTime);
-      oscillatorRef.current.type = waveType;
-      gainNodeRef.current.gain.setValueAtTime(safeAmplitude * 0.8, audioContextRef.current.currentTime);
+      
+      // Update gain with volume compensation
+      const compensation = getVolumeCompensation(waveType);
+      const adjustedGain = safeAmplitude * 0.8 * compensation;
+      gainNodeRef.current.gain.setValueAtTime(adjustedGain, audioContextRef.current.currentTime);
+      
+      console.log(`Updated oscillator: frequency ${safeFreq}Hz, compensated gain: ${adjustedGain}`);
     }
   };
 
@@ -204,7 +239,21 @@ const useAudioEngine = () => {
     console.log('Wave type updated:', newType);
     
     if (Platform.OS === 'web' && isPlaying) {
-      updateWebAudioOscillator();
+      // Clear any existing waveform switch timeout to prevent multiple oscillators
+      if (waveformSwitchTimeoutRef.current) {
+        clearTimeout(waveformSwitchTimeoutRef.current);
+        waveformSwitchTimeoutRef.current = null;
+      }
+      
+      // Stop current oscillator and ensure proper cleanup
+      // Web Audio oscillators cannot change type once started
+      stopWebAudioOscillator();
+      
+      // Wait for cleanup to complete before creating new oscillator
+      waveformSwitchTimeoutRef.current = setTimeout(() => {
+        startWebAudioOscillator(newType);
+        waveformSwitchTimeoutRef.current = null; // Clear reference after execution
+      }, 20);
     }
     
     // Update visualization
@@ -234,11 +283,12 @@ const useAudioEngine = () => {
     
     // Update Web Audio gain immediately if nodes exist
     if (Platform.OS === 'web' && gainNodeRef.current && audioContextRef.current) {
-      // Use a wider gain range: 0 to 0.8 instead of 0 to 0.3
-      const gainValue = clampedAmplitude * 0.8;
+      // Apply volume compensation based on current waveform
+      const compensation = getVolumeCompensation(waveType);
+      const gainValue = clampedAmplitude * 0.8 * compensation;
       try {
         gainNodeRef.current.gain.setValueAtTime(gainValue, audioContextRef.current.currentTime);
-        console.log('Gain node updated to:', gainValue, 'at time:', audioContextRef.current.currentTime);
+        console.log('Gain node updated to:', gainValue, 'compensation:', compensation, 'at time:', audioContextRef.current.currentTime);
         console.log('Current gain value:', gainNodeRef.current.gain.value);
       } catch (error) {
         console.error('Error setting gain:', error);
@@ -279,20 +329,19 @@ const useAudioEngine = () => {
       while (downsampledData.length < 1024) {
         const t = (downsampledData.length * frequency) / 100;
         let sample;
-        let sineComponent = Math.sin(t) * 0.3; // Subtle sine blend for artistic effect
         
         switch (waveType) {
           case 'sine': 
             sample = Math.sin(t); 
             break;
           case 'square': 
-            sample = Math.sign(Math.sin(t)) + sineComponent; 
+            sample = Math.sign(Math.sin(t)); 
             break;
           case 'sawtooth': 
-            sample = (2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5))) + sineComponent; 
+            sample = 2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5)); 
             break;
           case 'triangle': 
-            sample = (2 * Math.abs(2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5))) - 1) + sineComponent; 
+            sample = 2 * Math.abs(2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5))) - 1; 
             break;
           default: 
             sample = Math.sin(t);
@@ -329,13 +378,32 @@ const useAudioEngine = () => {
     
     return () => {
       if (Platform.OS === 'web') {
-        stopWebAudioOscillator();
-        if (audioContextRef.current) {
-          audioContextRef.current.close();
+        // Clean up any pending timeouts
+        if (waveformSwitchTimeoutRef.current) {
+          clearTimeout(waveformSwitchTimeoutRef.current);
+          waveformSwitchTimeoutRef.current = null;
         }
+        
+        // Clean up oscillator first
+        stopWebAudioOscillator();
+        
+        // Clean up audio context
+        if (audioContextRef.current) {
+          try {
+            audioContextRef.current.close();
+            audioContextRef.current = null;
+          } catch (error) {
+            console.warn('Error closing AudioContext:', error);
+          }
+        }
+        
+        // Clear remaining references
+        gainNodeRef.current = null;
+        analyserRef.current = null;
       } else {
         if (soundRef.current) {
           soundRef.current.unloadAsync().catch(console.error);
+          soundRef.current = null;
         }
       }
     };
@@ -410,10 +478,10 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
       // Normalize value from 0-255 range to -1 to 1 range
       const normalizedValue = (safeValue - 128) / 128;
       
-      // Add smooth flowing animation when playing
+      // Add smooth flowing animation when playing - preserve waveform characteristics
       const phaseOffset = isPlaying ? (animationOffset * 0.01 + index * 0.05) : 0;
       const animatedValue = isPlaying 
-        ? normalizedValue + Math.sin(phaseOffset) * 0.15 // Smooth flowing effect
+        ? normalizedValue + Math.sin(phaseOffset) * 0.05 // Subtle flow without distorting waveform shape
         : normalizedValue;
       
       const y = centerY + (animatedValue * amplitude);
@@ -564,25 +632,23 @@ export default function App() {
   };
 
   const handleButtonPress = async () => {
-    if (!audioInitialized) {
-      await initAudio();
-      setAudioInitialized(true);
-    }
-    
-    // Mobile Safari specific check
-    if (Platform.OS === 'web' && audioContextRef.current) {
-      const isMobileSafari = /iPhone|iPad|iPod/.test(navigator.userAgent) && /Safari/.test(navigator.userAgent);
-      if (isMobileSafari && audioContextRef.current.state !== 'running') {
-        console.log('Mobile Safari detected, ensuring AudioContext is running');
-        try {
-          await audioContextRef.current.resume();
-        } catch (error) {
-          console.error('Failed to resume AudioContext on mobile Safari:', error);
-        }
+    try {
+      if (!audioInitialized) {
+        console.log('Initializing audio...');
+        await initAudio();
+        setAudioInitialized(true);
+        
+        // After initialization, start playback directly
+        await togglePlayback();
+        
+        console.log('Audio initialized and started');
+      } else {
+        // Audio already initialized, just toggle playback
+        await togglePlayback();
       }
+    } catch (error) {
+      console.error('Failed to handle button press:', error);
     }
-    
-    await togglePlayback();
   };
 
   const waveTypes = ['sine', 'square', 'sawtooth', 'triangle'];

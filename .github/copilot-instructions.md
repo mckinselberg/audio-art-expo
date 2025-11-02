@@ -20,6 +20,7 @@ Project-specific patterns and conventions
 - **Touch interaction target**: `WaveformVisualizer` converts `audioData` -> SVG path and maps touch X coordinate -> frequency (200–2000Hz). **Roadmap calls for multi-touch gestures, pinch-zoom, rotation**.
 - **Current audio data**: tests and UI use a generated 1024-length array centered at 128. **Next phase**: replace with real audio synthesis and microphone input.
 - **Pattern engine goal**: Implement Lissajous curves, particle physics, fractal patterns, kaleidoscope effects (see EXECUTIVE_PLAN.md Phase 2).
+- **Deterministic programming**: Prefer deterministic programming over timers. Use direct state management, async/await patterns, and immediate execution instead of setTimeout/setInterval when possible. Only use timers when absolutely necessary for timing-dependent operations like animations or audio transitions.
 
 How to run / debug (commands you can use locally)
 Run the normal Expo flows (from project root):
