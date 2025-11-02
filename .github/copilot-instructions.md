@@ -1,21 +1,25 @@
 ## Quick orientation for AI coding agents
 
-This is an Expo React Native app (managed workflow). The goal of this file is to give focused, actionable hints so an AI assistant can be productive immediately.
+This is an **Interactive Audio Art Platform** built as an Expo React Native app (managed workflow). **Current state**: Already migrated from vanilla JS to React Native - we're in Phase 1+ of the roadmap (see `EXECUTIVE_PLAN.md`).
 
 Key facts (discoverable in the repo):
 - Entry point: `index.js` — calls `registerRootComponent(App)`.
 - Main UI & audio placeholder: `App.js` — contains `useAudioEngine()` (placeholder implementation) and `WaveformVisualizer` (SVG-based) that drives UX.
 - Project manifest: `app.json` — Expo config (icons, splash, `newArchEnabled: true`).
 - Scripts: found in `package.json` — `start`, `android`, `ios`, `web` which run `expo start` with appropriate flags.
+- **Roadmap**: `EXECUTIVE_PLAN.md` — 4-phase plan to build interactive audio-visual art platform.
 
 High-level architecture / why things are organized this way
+- **Goal**: Interactive artistic audio platform with multi-touch controls, generative visuals, and cross-platform deployment.
 - Single-page Expo app: native/web via `react-native-web`. The visualizer is implemented in React Native + `react-native-svg` which keeps the same code path for mobile and web.
-- Audio engine is currently a JS placeholder inside `App.js` (`useAudioEngine`). The intent is to later replace it with `expo-av` or a native module for low-latency audio. Expect work to touch both the hook and native/audio service boundaries.
+- Audio engine is currently a JS placeholder inside `App.js` (`useAudioEngine`). **Next step**: replace with `expo-av` for real audio synthesis and microphone input (Phase 2+).
+- **Phase 1 focus**: Interactive controls, real-time parameter manipulation, basic pattern modes.
 
 Project-specific patterns and conventions
-- Lightweight local hooks: audio logic is encapsulated in `useAudioEngine()` inside `App.js`. When extending, follow the pattern of returning control functions and state: { initAudio, togglePlayback, updateFrequency, isPlaying, frequency, audioData }.
-- Visualizer -> touch mapping: `WaveformVisualizer` converts `audioData` -> SVG path and maps touch X coordinate -> frequency (200–2000Hz). Keep this mapping if you change UX.
-- Fake audio data: tests and UI use a generated 1024-length array centered at 128. When adding real audio, preserve the sample buffer shape or adapt visualizer accordingly.
+- **Phase 1 Implementation**: Lightweight local hooks pattern used in `useAudioEngine()` inside `App.js`. When extending, follow the pattern of returning control functions and state: { initAudio, togglePlayback, updateFrequency, isPlaying, frequency, audioData }.
+- **Touch interaction target**: `WaveformVisualizer` converts `audioData` -> SVG path and maps touch X coordinate -> frequency (200–2000Hz). **Roadmap calls for multi-touch gestures, pinch-zoom, rotation**.
+- **Current audio data**: tests and UI use a generated 1024-length array centered at 128. **Next phase**: replace with real audio synthesis and microphone input.
+- **Pattern engine goal**: Implement Lissajous curves, particle physics, fractal patterns, kaleidoscope effects (see EXECUTIVE_PLAN.md Phase 2).
 
 How to run / debug (commands you can use locally)
 Run the normal Expo flows (from project root):
@@ -49,5 +53,6 @@ Files to inspect for most tasks
 - `index.js` — root registration.
 - `package.json` — scripts and dependencies.
 - `app.json` — Expo configuration (icons, splash, `newArchEnabled`).
+- `EXECUTIVE_PLAN.md` — roadmap and technical architecture (4 phases, current state vs goals).
 
 If anything is unclear or you want more details (example test harness, adding expo-av, or a migration plan to native audio), say which part to expand and I will update these instructions.
