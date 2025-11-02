@@ -27,6 +27,12 @@ const useAudioEngine = () => {
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
           
+          // Mobile Safari requires explicit resume after user interaction
+          if (audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+            console.log('AudioContext resumed for mobile Safari');
+          }
+          
           // Create gain node for volume control
           gainNodeRef.current = audioContextRef.current.createGain();
           gainNodeRef.current.gain.setValueAtTime(0.5, audioContextRef.current.currentTime);
@@ -40,7 +46,7 @@ const useAudioEngine = () => {
           gainNodeRef.current.connect(analyserRef.current);
           analyserRef.current.connect(audioContextRef.current.destination);
           
-          console.log('Web Audio API initialized');
+          console.log('Web Audio API initialized, state:', audioContextRef.current.state);
         }
       } else {
         // Use expo-av for mobile
@@ -151,6 +157,11 @@ const useAudioEngine = () => {
         console.log('Audio stopped');
       } else {
         if (Platform.OS === 'web') {
+          // Ensure AudioContext is running before starting oscillator (mobile Safari fix)
+          if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+            console.log('AudioContext resumed before playback');
+          }
           startWebAudioOscillator();
         } else {
           // For mobile, we'd need to generate or load audio files
@@ -557,6 +568,20 @@ export default function App() {
       await initAudio();
       setAudioInitialized(true);
     }
+    
+    // Mobile Safari specific check
+    if (Platform.OS === 'web' && audioContextRef.current) {
+      const isMobileSafari = /iPhone|iPad|iPod/.test(navigator.userAgent) && /Safari/.test(navigator.userAgent);
+      if (isMobileSafari && audioContextRef.current.state !== 'running') {
+        console.log('Mobile Safari detected, ensuring AudioContext is running');
+        try {
+          await audioContextRef.current.resume();
+        } catch (error) {
+          console.error('Failed to resume AudioContext on mobile Safari:', error);
+        }
+      }
+    }
+    
     await togglePlayback();
   };
 
@@ -578,7 +603,7 @@ export default function App() {
           onPress={handleButtonPress}
         >
           <Text style={styles.buttonText}>
-            {isPlaying ? 'STOP' : 'START'}
+            {isPlaying ? 'STOP' : (!audioInitialized ? 'TAP TO START' : 'START')}
           </Text>
         </TouchableOpacity>
         
