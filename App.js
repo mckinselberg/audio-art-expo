@@ -377,26 +377,39 @@ const useAudioEngine = () => {
           try {
             addDebugInfo('Creating AudioContext directly in toggle...');
             
-            if (!audioContextRef.current) {
+            // For mobile Safari, create fresh AudioContext each time if needed
+            if (!audioContextRef.current || audioContextRef.current.state === 'suspended') {
+              addDebugInfo('Creating fresh AudioContext for mobile Safari...');
               audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-              addDebugInfo('AudioContext created, state: ' + audioContextRef.current.state);
-            }
-            
-            // CRITICAL: Resume MUST happen in direct user event handler
-            if (audioContextRef.current.state !== 'running') {
-              addDebugInfo('Resuming AudioContext in direct user event...');
-              await audioContextRef.current.resume();
-              addDebugInfo('AudioContext state after resume: ' + audioContextRef.current.state);
-            }
-            
-            // Create gain if needed
-            if (!gainNodeRef.current) {
+              addDebugInfo('New AudioContext created, state: ' + audioContextRef.current.state);
+              
+              // Create fresh gain node
               gainNodeRef.current = audioContextRef.current.createGain();
               gainNodeRef.current.connect(audioContextRef.current.destination);
-              addDebugInfo('Gain node created and connected');
+              addDebugInfo('Fresh gain node created and connected');
             }
             
-            // Create and start oscillator immediately
+            // CRITICAL: Multiple resume attempts with different timing
+            if (audioContextRef.current.state !== 'running') {
+              addDebugInfo('Attempting resume #1...');
+              await audioContextRef.current.resume();
+              addDebugInfo('Resume #1 result: ' + audioContextRef.current.state);
+              
+              // Second attempt with delay
+              if (audioContextRef.current.state !== 'running') {
+                addDebugInfo('Attempting resume #2 with delay...');
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await audioContextRef.current.resume();
+                addDebugInfo('Resume #2 result: ' + audioContextRef.current.state);
+              }
+              
+              // Force start audio even if still suspended
+              if (audioContextRef.current.state !== 'running') {
+                addDebugInfo('AudioContext still suspended, forcing oscillator anyway...');
+              }
+            }
+            
+            // Create and start oscillator immediately (even if suspended)
             const osc = audioContextRef.current.createOscillator();
             osc.frequency.setValueAtTime(frequency, audioContextRef.current.currentTime);
             osc.type = waveType;
@@ -405,10 +418,11 @@ const useAudioEngine = () => {
             // Set volume
             gainNodeRef.current.gain.setValueAtTime(amplitude * 0.3, audioContextRef.current.currentTime);
             
+            addDebugInfo('Starting oscillator regardless of context state...');
             osc.start(audioContextRef.current.currentTime);
             oscillatorRef.current = osc;
             
-            addDebugInfo('Mobile Safari: oscillator started directly!');
+            addDebugInfo('Mobile Safari: oscillator started! Final context state: ' + audioContextRef.current.state);
             setIsPlaying(true);
             
           } catch (error) {
