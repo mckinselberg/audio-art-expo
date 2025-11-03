@@ -620,8 +620,10 @@ const useAudioEngine = () => {
 
   // Update real-time audio data from analyser
   const updateAudioData = () => {
-    // For desktop with Web Audio API and analyser
-    if (Platform.OS === 'web' && analyserRef.current && isPlaying && !(/iPad|iPhone|iPod/.test(navigator.userAgent))) {
+    // For desktop with Web Audio API and analyser (exclude mobile Safari)
+    const isMobileSafari = Platform.OS === 'web' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+    
+    if (Platform.OS === 'web' && analyserRef.current && isPlaying && !isMobileSafari) {
       const bufferLength = analyserRef.current.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
       analyserRef.current.getByteTimeDomainData(dataArray);
@@ -649,6 +651,7 @@ const useAudioEngine = () => {
     }
     
     // For mobile Safari or when real audio data isn't available, use generated waveforms
+    // Always generate fresh waveforms with current parameters
     const waveformData = generateWaveform(frequency, waveType, amplitude);
     setAudioData(waveformData);
   };
@@ -670,6 +673,13 @@ const useAudioEngine = () => {
       }
     };
   }, [isPlaying, frequency, waveType, amplitude]);
+
+  // Update visualization when parameters change (especially important for mobile Safari)
+  useEffect(() => {
+    if (isPlaying) {
+      updateAudioData();
+    }
+  }, [frequency, waveType, amplitude, isPlaying]);
 
   // Initialize with default waveform
   useEffect(() => {
