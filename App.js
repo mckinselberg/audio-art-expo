@@ -33,6 +33,11 @@ const useAudioEngine = () => {
     setDebugInfo(prev => prev + '\n' + message);
   };
 
+  // Helper function to clear debug info
+  const clearDebugInfo = () => {
+    setDebugInfo('');
+  };
+
   // Helper function to check if we should use Web Audio API
   const shouldUseWebAudio = () => {
     return Platform.OS === 'web' && !usingFallbackAudio; // Both desktop and mobile Safari use Web Audio, unless fallback is needed
@@ -595,7 +600,9 @@ const useAudioEngine = () => {
     frequency,
     waveType,
     amplitude,
-    audioData
+    audioData,
+    debugInfo,
+    clearDebugInfo
   };
 };
 
@@ -789,7 +796,9 @@ export default function App() {
     frequency, 
     waveType,
     amplitude,
-    audioData 
+    audioData,
+    debugInfo,
+    clearDebugInfo
   } = useAudioEngine();
   const [audioInitialized, setAudioInitialized] = useState(false);
 
@@ -934,7 +943,7 @@ export default function App() {
             <Text style={styles.debugText}>{debugInfo}</Text>
             <TouchableOpacity 
               style={styles.clearDebugButton}
-              onPress={() => setDebugInfo('')}
+              onPress={clearDebugInfo}
             >
               <Text style={styles.clearDebugText}>Clear</Text>
             </TouchableOpacity>
