@@ -19,8 +19,40 @@ const useAudioEngine = () => {
   const gainNodeRef = useRef(null);
   const analyserRef = useRef(null);
   
+  // HTML5 Audio fallback for mobile Safari
+  const audioElementRef = useRef(null);
+  const [usingFallbackAudio, setUsingFallbackAudio] = useState(false);
+  
   // Timeout references for cleanup
   const waveformSwitchTimeoutRef = useRef(null);
+
+  // Helper function to check if we should use Web Audio API
+  const shouldUseWebAudio = () => {
+    return Platform.OS === 'web' && !usingFallbackAudio; // Both desktop and mobile Safari use Web Audio, unless fallback is needed
+  };
+
+  // Fallback audio using HTML5 Audio element (for mobile Safari if Web Audio fails)
+  const createSimpleAudioTone = (freq, type, duration = 1) => {
+    // This creates a simple beep using data URL - basic fallback
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const buffer = audioContext.createBuffer(1, audioContext.sampleRate * duration, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    
+    for (let i = 0; i < data.length; i++) {
+      const t = i / audioContext.sampleRate;
+      let sample;
+      switch (type) {
+        case 'sine': sample = Math.sin(2 * Math.PI * freq * t); break;
+        case 'square': sample = Math.sign(Math.sin(2 * Math.PI * freq * t)); break;
+        case 'sawtooth': sample = 2 * (freq * t - Math.floor(freq * t + 0.5)); break;
+        case 'triangle': sample = 2 * Math.abs(2 * (freq * t - Math.floor(freq * t + 0.5))) - 1; break;
+        default: sample = Math.sin(2 * Math.PI * freq * t);
+      }
+      data[i] = sample * amplitude * 0.3; // Apply amplitude
+    }
+    
+    return buffer;
+  };
 
   // Volume compensation matrix for different waveforms
   // Based on RMS (Root Mean Square) and perceived loudness
@@ -37,14 +69,26 @@ const useAudioEngine = () => {
   // Initialize audio system with platform detection
   const initAudio = async () => {
     try {
-      if (Platform.OS === 'web') {
-        // Use Web Audio API for web
+      // Detect mobile Safari specifically
+      const isMobileSafari = Platform.OS === 'web' && 
+        /iPad|iPhone|iPod/.test(navigator.userAgent) && 
+        !window.MSStream;
+      
+      console.log('=== AUDIO INITIALIZATION DEBUG ===');
+      console.log('Platform.OS:', Platform.OS);
+      console.log('navigator.userAgent:', navigator.userAgent);
+      console.log('isMobileSafari:', isMobileSafari);
+      console.log('window.AudioContext:', !!window.AudioContext);
+      console.log('window.webkitAudioContext:', !!window.webkitAudioContext);
+      
+      if (Platform.OS === 'web' && !isMobileSafari) {
+        // Use Web Audio API for desktop web
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
           
           // Create gain node for volume control
           gainNodeRef.current = audioContextRef.current.createGain();
-          gainNodeRef.current.gain.setValueAtTime(0.5, audioContextRef.current.currentTime);
+          gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
           
           // Create analyser for visualization
           analyserRef.current = audioContextRef.current.createAnalyser();
@@ -63,8 +107,52 @@ const useAudioEngine = () => {
           await audioContextRef.current.resume();
           console.log('AudioContext resumed after user interaction');
         }
+      } else if (isMobileSafari) {
+        // Special handling for mobile Safari
+        console.log('=== MOBILE SAFARI AUDIO SETUP ===');
+        
+        if (!audioContextRef.current) {
+          try {
+            // Try creating AudioContext
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            console.log('AudioContextClass:', AudioContextClass);
+            
+            audioContextRef.current = new AudioContextClass();
+            console.log('AudioContext created, state:', audioContextRef.current.state);
+            console.log('AudioContext sampleRate:', audioContextRef.current.sampleRate);
+            console.log('AudioContext currentTime:', audioContextRef.current.currentTime);
+            
+            // Create gain node for volume control
+            gainNodeRef.current = audioContextRef.current.createGain();
+            console.log('Gain node created:', !!gainNodeRef.current);
+            
+            gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
+            console.log('Gain value set to 0.3');
+            
+            gainNodeRef.current.connect(audioContextRef.current.destination);
+            console.log('Gain connected to destination');
+            
+          } catch (error) {
+            console.error('Failed to create mobile Safari AudioContext:', error);
+            throw error;
+          }
+        }
+        
+        // Force resume on mobile Safari (critical!)
+        if (audioContextRef.current.state === 'suspended') {
+          console.log('AudioContext is suspended, attempting resume...');
+          try {
+            await audioContextRef.current.resume();
+            console.log('AudioContext resumed successfully, new state:', audioContextRef.current.state);
+          } catch (error) {
+            console.error('Failed to resume AudioContext:', error);
+            throw error;
+          }
+        } else {
+          console.log('AudioContext state is already:', audioContextRef.current.state);
+        }
       } else {
-        // Use expo-av for mobile
+        // Use expo-audio for native mobile
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           staysActiveInBackground: false,
@@ -74,6 +162,7 @@ const useAudioEngine = () => {
         });
         console.log('Expo Audio initialized');
       }
+      console.log('=== AUDIO INITIALIZATION COMPLETE ===');
     } catch (error) {
       console.error('Failed to initialize audio:', error);
     }
@@ -111,25 +200,81 @@ const useAudioEngine = () => {
 
   // Create and start oscillator (Web Audio API)
   const startWebAudioOscillator = (waveTypeParam = waveType) => {
+    console.log('=== STARTING OSCILLATOR DEBUG ===');
+    console.log('audioContextRef.current exists:', !!audioContextRef.current);
+    console.log('oscillatorRef.current exists:', !!oscillatorRef.current);
+    console.log('gainNodeRef.current exists:', !!gainNodeRef.current);
+    
     if (audioContextRef.current && !oscillatorRef.current) {
-      oscillatorRef.current = audioContextRef.current.createOscillator();
-      oscillatorRef.current.type = waveTypeParam;
-      
-      // Ensure frequency is valid before setting
-      const safeFreq = isNaN(frequency) || !isFinite(frequency) ? 440 : frequency;
-      oscillatorRef.current.frequency.setValueAtTime(safeFreq, audioContextRef.current.currentTime);
-      
-      // Connect to gain node (which is already connected to analyser -> destination)
-      oscillatorRef.current.connect(gainNodeRef.current);
-      oscillatorRef.current.start();
-      
-      // Set volume with safety check and waveform compensation
-      const safeAmplitude = isNaN(amplitude) || !isFinite(amplitude) ? 0.5 : amplitude;
-      const compensation = getVolumeCompensation(waveTypeParam);
-      const adjustedGain = safeAmplitude * 0.8 * compensation;
-      gainNodeRef.current.gain.setValueAtTime(adjustedGain, audioContextRef.current.currentTime);
-      
-      console.log(`Started ${waveTypeParam} oscillator at ${safeFreq}Hz with amplitude ${safeAmplitude} (compensated gain: ${adjustedGain})`);
+      try {
+        // Detect mobile Safari
+        const isMobileSafari = Platform.OS === 'web' && 
+          /iPad|iPhone|iPod/.test(navigator.userAgent) && 
+          !window.MSStream;
+        
+        console.log('isMobileSafari:', isMobileSafari);
+        console.log('AudioContext state before oscillator:', audioContextRef.current.state);
+        
+        oscillatorRef.current = audioContextRef.current.createOscillator();
+        console.log('Oscillator created:', !!oscillatorRef.current);
+        
+        oscillatorRef.current.type = waveTypeParam;
+        console.log('Oscillator type set to:', waveTypeParam);
+        
+        // Ensure frequency is valid before setting
+        const safeFreq = isNaN(frequency) || !isFinite(frequency) ? 440 : frequency;
+        oscillatorRef.current.frequency.setValueAtTime(safeFreq, audioContextRef.current.currentTime);
+        console.log('Oscillator frequency set to:', safeFreq);
+        
+        // Connect to gain node
+        oscillatorRef.current.connect(gainNodeRef.current);
+        console.log('Oscillator connected to gain node');
+        
+        // For mobile Safari, ensure gain is connected to destination
+        if (isMobileSafari) {
+          console.log('Mobile Safari: ensuring gain -> destination connection');
+          // Check if already connected by trying to connect (will error if already connected)
+          try {
+            gainNodeRef.current.disconnect();
+            gainNodeRef.current.connect(audioContextRef.current.destination);
+            console.log('Mobile Safari: gain reconnected to destination');
+          } catch (e) {
+            console.log('Mobile Safari: gain connection error (may already be connected):', e.message);
+          }
+        } else {
+          // For desktop, connect to analyser if it exists
+          if (analyserRef.current) {
+            console.log('Desktop: ensuring gain -> analyser connection');
+            try {
+              gainNodeRef.current.disconnect();
+              gainNodeRef.current.connect(analyserRef.current);
+              console.log('Desktop: gain reconnected to analyser');
+            } catch (e) {
+              console.log('Desktop: gain connection error (may already be connected):', e.message);
+            }
+          }
+        }
+        
+        // Start the oscillator
+        console.log('Starting oscillator...');
+        oscillatorRef.current.start();
+        console.log('Oscillator started successfully');
+        
+        // Set volume with safety check and waveform compensation
+        const safeAmplitude = isNaN(amplitude) || !isFinite(amplitude) ? 0.3 : amplitude;
+        const compensation = getVolumeCompensation(waveTypeParam);
+        const adjustedGain = safeAmplitude * 0.8 * compensation;
+        gainNodeRef.current.gain.setValueAtTime(adjustedGain, audioContextRef.current.currentTime);
+        
+        console.log(`Started ${waveTypeParam} oscillator at ${safeFreq}Hz with amplitude ${safeAmplitude} (compensated gain: ${adjustedGain})`);
+        console.log('Final AudioContext state:', audioContextRef.current.state);
+        console.log('=== OSCILLATOR START COMPLETE ===');
+      } catch (error) {
+        console.error('Error in startWebAudioOscillator:', error);
+        oscillatorRef.current = null; // Reset on error
+      }
+    } else {
+      console.log('Skipping oscillator start - audioContext:', !!audioContextRef.current, 'oscillator already exists:', !!oscillatorRef.current);
     }
   };
 
@@ -178,7 +323,7 @@ const useAudioEngine = () => {
   const togglePlayback = async () => {
     try {
       if (isPlaying) {
-        if (Platform.OS === 'web') {
+        if (shouldUseWebAudio()) {
           stopWebAudioOscillator();
         } else {
           // Stop expo-av audio
@@ -191,11 +336,11 @@ const useAudioEngine = () => {
         setIsPlaying(false);
         console.log('Audio stopped');
       } else {
-        if (Platform.OS === 'web') {
-          // Ensure AudioContext is running before starting oscillator (mobile Safari fix)
+        if (shouldUseWebAudio()) {
+          // Aggressive AudioContext resumption for mobile Safari
           if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
             await audioContextRef.current.resume();
-            console.log('AudioContext resumed before playback');
+            console.log('AudioContext aggressively resumed before playback');
           }
           startWebAudioOscillator();
         } else {
@@ -225,7 +370,7 @@ const useAudioEngine = () => {
     setFrequency(newFreq);
     console.log('Frequency updated:', newFreq);
     
-    if (Platform.OS === 'web' && isPlaying) {
+    if (shouldUseWebAudio() && isPlaying) {
       updateWebAudioOscillator();
     }
     
@@ -238,7 +383,7 @@ const useAudioEngine = () => {
     setWaveType(newType);
     console.log('Wave type updated:', newType);
     
-    if (Platform.OS === 'web' && isPlaying) {
+    if (shouldUseWebAudio() && isPlaying) {
       // Clear any existing waveform switch timeout to prevent multiple oscillators
       if (waveformSwitchTimeoutRef.current) {
         clearTimeout(waveformSwitchTimeoutRef.current);
@@ -250,7 +395,12 @@ const useAudioEngine = () => {
       stopWebAudioOscillator();
       
       // Wait for cleanup to complete before creating new oscillator
-      waveformSwitchTimeoutRef.current = setTimeout(() => {
+      waveformSwitchTimeoutRef.current = setTimeout(async () => {
+        // Aggressive resume for mobile Safari on wave type changes
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+          console.log('AudioContext resumed during wave type change');
+        }
         startWebAudioOscillator(newType);
         waveformSwitchTimeoutRef.current = null; // Clear reference after execution
       }, 20);
