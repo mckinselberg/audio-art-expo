@@ -78,40 +78,43 @@ const useAudioEngine = () => {
     return compensationMatrix[waveType] || 1.0;
   };
 
-  // Simple mobile Safari audio using HTML5 Audio element
+  // Simple mobile Safari audio using existing AudioContext
   const createMobileSafariAudio = async () => {
     try {
-      addDebugInfo('Creating mobile Safari audio...');
+      addDebugInfo('Skipping HTML5 Audio, using Web Audio directly...');
       
-      // Create a simple beep tone using data URL
-      const sampleRate = 22050;
-      const duration = 2; // 2 seconds
-      const frequency = 440;
-      const samples = sampleRate * duration;
-      
-      // Generate wave data
-      const wave = new Array(samples);
-      for (let i = 0; i < samples; i++) {
-        wave[i] = Math.sin(2 * Math.PI * frequency * i / sampleRate) * 0.3;
+      // Since AudioContext is created but suspended, let's try to use it directly
+      if (audioContextRef.current) {
+        addDebugInfo('Using existing AudioContext...');
+        
+        // Force resume more aggressively
+        if (audioContextRef.current.state === 'suspended') {
+          addDebugInfo('Attempting to resume suspended AudioContext...');
+          await audioContextRef.current.resume();
+          addDebugInfo('Resume attempt complete, state: ' + audioContextRef.current.state);
+        }
+        
+        // Try creating a simple oscillator immediately
+        try {
+          const testOsc = audioContextRef.current.createOscillator();
+          testOsc.frequency.setValueAtTime(440, audioContextRef.current.currentTime);
+          testOsc.connect(gainNodeRef.current);
+          testOsc.start();
+          testOsc.stop(audioContextRef.current.currentTime + 0.2); // 200ms beep
+          
+          addDebugInfo('Test oscillator created and started!');
+          setUsingFallbackAudio(false); // Use Web Audio, not fallback
+          return true;
+        } catch (oscError) {
+          addDebugInfo('Oscillator test failed: ' + oscError.message);
+          return false;
+        }
       }
       
-      // Convert to WAV format (simplified)
-      const audioElement = new Audio();
-      audioElement.volume = 0.3;
-      
-      // Use a simple data URL beep
-      const audioUrl = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+D0wm4hBS13yvDZiTsOFGS49+ORQQ4ZZ7Pp3Z1OFQlHoeHzy2wiBSl0yO/WiTsOFGC49+OQQA4YZrPq3ZxNGQxJpN/yxm8jBSBrxu7VkUA9OA==';
-      audioElement.src = audioUrl;
-      
-      addDebugInfo('Audio element created with data URL');
-      
-      await audioElement.play();
-      addDebugInfo('Mobile Safari audio playing!');
-      
-      setUsingFallbackAudio(true);
-      return true;
+      addDebugInfo('No AudioContext available');
+      return false;
     } catch (error) {
-      addDebugInfo('Mobile Safari audio failed: ' + error.message);
+      addDebugInfo('Direct Web Audio failed: ' + error.message);
       return false;
     }
   };
