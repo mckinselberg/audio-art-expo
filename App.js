@@ -362,71 +362,98 @@ const useAudioEngine = () => {
         !window.MSStream;
       
       if (isMobileSafari) {
-        addDebugInfo('=== MOBILE SAFARI TOGGLE ===');
+        addDebugInfo('=== MOBILE SAFARI STANDARD APPROACH ===');
         
         if (isPlaying) {
           // Stop audio
+          if (audioElementRef.current) {
+            audioElementRef.current.pause();
+            audioElementRef.current = null;
+            addDebugInfo('HTML5 Audio stopped');
+          }
           if (oscillatorRef.current) {
             oscillatorRef.current.stop();
             oscillatorRef.current = null;
-            addDebugInfo('Mobile Safari: oscillator stopped');
+            addDebugInfo('Web Audio stopped');
           }
           setIsPlaying(false);
         } else {
-          // Start audio immediately - most direct approach
+          // Standard mobile Safari approach - HTML5 Audio first
+          addDebugInfo('Trying standard HTML5 Audio approach...');
+          
           try {
-            addDebugInfo('Creating AudioContext directly in toggle...');
+            // Create audio element in direct user gesture (CRITICAL)
+            const audio = document.createElement('audio');
             
-            // For mobile Safari, create fresh AudioContext each time if needed
-            if (!audioContextRef.current || audioContextRef.current.state === 'suspended') {
-              addDebugInfo('Creating fresh AudioContext for mobile Safari...');
-              audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-              addDebugInfo('New AudioContext created, state: ' + audioContextRef.current.state);
-              
-              // Create fresh gain node
-              gainNodeRef.current = audioContextRef.current.createGain();
-              gainNodeRef.current.connect(audioContextRef.current.destination);
-              addDebugInfo('Fresh gain node created and connected');
+            // Generate a simple tone using data URL (standard approach)
+            const duration = 2;
+            const sampleRate = 8000; // Lower sample rate for mobile
+            const frequency = 440;
+            const amplitude = 0.3;
+            
+            // Create WAV header (minimal but valid)
+            const samples = sampleRate * duration;
+            const buffer = new ArrayBuffer(44 + samples * 2);
+            const view = new DataView(buffer);
+            
+            // WAV header
+            const writeString = (offset, string) => {
+              for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+              }
+            };
+            
+            writeString(0, 'RIFF');
+            view.setUint32(4, 36 + samples * 2, true);
+            writeString(8, 'WAVE');
+            writeString(12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(36, 'data');
+            view.setUint32(40, samples * 2, true);
+            
+            // Generate sine wave data
+            for (let i = 0; i < samples; i++) {
+              const sample = Math.sin(2 * Math.PI * frequency * i / sampleRate) * amplitude * 32767;
+              view.setInt16(44 + i * 2, sample, true);
             }
             
-            // CRITICAL: Multiple resume attempts with different timing
-            if (audioContextRef.current.state !== 'running') {
-              addDebugInfo('Attempting resume #1...');
-              await audioContextRef.current.resume();
-              addDebugInfo('Resume #1 result: ' + audioContextRef.current.state);
-              
-              // Second attempt with delay
-              if (audioContextRef.current.state !== 'running') {
-                addDebugInfo('Attempting resume #2 with delay...');
-                await new Promise(resolve => setTimeout(resolve, 100));
-                await audioContextRef.current.resume();
-                addDebugInfo('Resume #2 result: ' + audioContextRef.current.state);
-              }
-              
-              // Force start audio even if still suspended
-              if (audioContextRef.current.state !== 'running') {
-                addDebugInfo('AudioContext still suspended, forcing oscillator anyway...');
-              }
+            // Create blob and play immediately
+            const blob = new Blob([buffer], { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            
+            audio.src = url;
+            audio.volume = 0.3;
+            
+            addDebugInfo('Playing HTML5 audio with generated WAV...');
+            
+            // CRITICAL: play() must be called synchronously in user gesture
+            const playPromise = audio.play();
+            
+            if (playPromise) {
+              playPromise.then(() => {
+                addDebugInfo('HTML5 Audio playing successfully!');
+                audioElementRef.current = audio;
+                setIsPlaying(true);
+              }).catch(error => {
+                addDebugInfo('HTML5 Audio play failed: ' + error.message);
+                // Fallback to Web Audio
+                tryWebAudioFallback();
+              });
+            } else {
+              addDebugInfo('Audio play returned undefined - old browser');
+              audioElementRef.current = audio;
+              setIsPlaying(true);
             }
-            
-            // Create and start oscillator immediately (even if suspended)
-            const osc = audioContextRef.current.createOscillator();
-            osc.frequency.setValueAtTime(frequency, audioContextRef.current.currentTime);
-            osc.type = waveType;
-            osc.connect(gainNodeRef.current);
-            
-            // Set volume
-            gainNodeRef.current.gain.setValueAtTime(amplitude * 0.3, audioContextRef.current.currentTime);
-            
-            addDebugInfo('Starting oscillator regardless of context state...');
-            osc.start(audioContextRef.current.currentTime);
-            oscillatorRef.current = osc;
-            
-            addDebugInfo('Mobile Safari: oscillator started! Final context state: ' + audioContextRef.current.state);
-            setIsPlaying(true);
             
           } catch (error) {
-            addDebugInfo('Mobile Safari direct toggle failed: ' + error.message);
+            addDebugInfo('HTML5 Audio creation failed: ' + error.message);
+            tryWebAudioFallback();
           }
         }
       } else {
@@ -435,7 +462,6 @@ const useAudioEngine = () => {
           if (shouldUseWebAudio()) {
             stopWebAudioOscillator();
           } else {
-            // Stop expo-av audio
             if (soundRef.current) {
               await soundRef.current.stopAsync();
               await soundRef.current.unloadAsync();
@@ -446,15 +472,12 @@ const useAudioEngine = () => {
           console.log('Audio stopped');
         } else {
           if (shouldUseWebAudio()) {
-            // Aggressive AudioContext resumption for mobile Safari
             if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
               await audioContextRef.current.resume();
               console.log('AudioContext aggressively resumed before playback');
             }
             startWebAudioOscillator();
           } else {
-            // For mobile, we'd need to generate or load audio files
-            // This is a placeholder for now
             console.log('Mobile audio playback would start here');
           }
           setIsPlaying(true);
@@ -468,6 +491,34 @@ const useAudioEngine = () => {
     } catch (error) {
       addDebugInfo('Toggle playback failed: ' + error.message);
       console.error('Failed to toggle playback:', error);
+    }
+  };
+
+  // Fallback function for mobile Safari
+  const tryWebAudioFallback = () => {
+    addDebugInfo('Trying Web Audio fallback...');
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
+      oscillator.type = 'sine';
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      
+      oscillator.start();
+      
+      audioContextRef.current = audioContext;
+      oscillatorRef.current = oscillator;
+      gainNodeRef.current = gainNode;
+      
+      addDebugInfo('Web Audio fallback started');
+      setIsPlaying(true);
+    } catch (error) {
+      addDebugInfo('Web Audio fallback failed: ' + error.message);
     }
   };
 
