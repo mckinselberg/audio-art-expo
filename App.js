@@ -821,88 +821,21 @@ export default function App() {
 
   const handleButtonPress = async () => {
     try {
-      addDebugInfo('=== BUTTON PRESSED ===');
-      
-      // Detect mobile Safari
-      const isMobileSafari = Platform.OS === 'web' && 
-        /iPad|iPhone|iPod/.test(navigator.userAgent) && 
-        !window.MSStream;
-      
-      if (isMobileSafari) {
-        addDebugInfo('Mobile Safari - direct audio creation...');
+      if (!audioInitialized) {
+        console.log('Initializing audio...');
+        await initAudio();
+        setAudioInitialized(true);
         
-        // Create AudioContext directly in button handler (most aggressive approach)
-        try {
-          let audioContext = audioContextRef.current;
-          
-          if (!audioContext) {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            audioContextRef.current = audioContext;
-            addDebugInfo('New AudioContext created in button handler');
-          }
-          
-          addDebugInfo('AudioContext state before resume: ' + audioContext.state);
-          
-          // Resume if suspended
-          if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-            addDebugInfo('AudioContext state after resume: ' + audioContext.state);
-          }
-          
-          // Create gain node if it doesn't exist
-          if (!gainNodeRef.current) {
-            gainNodeRef.current = audioContext.createGain();
-            gainNodeRef.current.gain.setValueAtTime(0.3, audioContext.currentTime);
-            gainNodeRef.current.connect(audioContext.destination);
-            addDebugInfo('Gain node created and connected');
-          }
-          
-          // Create oscillator immediately in the button press
-          if (!oscillatorRef.current) {
-            const osc = audioContext.createOscillator();
-            osc.frequency.setValueAtTime(440, audioContext.currentTime);
-            osc.type = 'sine';
-            osc.connect(gainNodeRef.current);
-            
-            addDebugInfo('About to start oscillator...');
-            osc.start(audioContext.currentTime);
-            addDebugInfo('Oscillator started!');
-            
-            oscillatorRef.current = osc;
-            setIsPlaying(true);
-            setAudioInitialized(true);
-            
-            addDebugInfo('Mobile Safari audio should be playing!');
-          } else {
-            // Stop existing oscillator
-            oscillatorRef.current.stop();
-            oscillatorRef.current = null;
-            setIsPlaying(false);
-            addDebugInfo('Stopped existing oscillator');
-          }
-          
-        } catch (error) {
-          addDebugInfo('Mobile Safari direct audio failed: ' + error.message);
-        }
+        // After initialization, start playback directly
+        await togglePlayback();
         
+        console.log('Audio initialized and started');
       } else {
-        // Original logic for other platforms
-        if (!audioInitialized) {
-          addDebugInfo('Initializing audio...');
-          await initAudio();
-          setAudioInitialized(true);
-          
-          // After initialization, start playback directly
-          await togglePlayback();
-          
-          addDebugInfo('Audio initialized and started');
-        } else {
-          // Audio already initialized, just toggle playback
-          await togglePlayback();
-        }
+        // Audio already initialized, just toggle playback
+        await togglePlayback();
       }
     } catch (error) {
-      addDebugInfo('Button press failed: ' + error.message);
+      console.error('Failed to handle button press:', error);
     }
   };
 
