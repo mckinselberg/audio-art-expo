@@ -11,6 +11,7 @@ const useAudioEngine = () => {
   const [waveType, setWaveType] = useState('sine');
   const [amplitude, setAmplitude] = useState(0.3);
   const [audioData, setAudioData] = useState(new Array(1024).fill(128));
+  const [debugInfo, setDebugInfo] = useState(''); // On-screen debug info
   const soundRef = useRef(null);
   
   // Web Audio API references (for web platform)
@@ -25,6 +26,12 @@ const useAudioEngine = () => {
   
   // Timeout references for cleanup
   const waveformSwitchTimeoutRef = useRef(null);
+
+  // Helper function to add debug info to screen
+  const addDebugInfo = (message) => {
+    console.log(message);
+    setDebugInfo(prev => prev + '\n' + message);
+  };
 
   // Helper function to check if we should use Web Audio API
   const shouldUseWebAudio = () => {
@@ -66,6 +73,44 @@ const useAudioEngine = () => {
     return compensationMatrix[waveType] || 1.0;
   };
 
+  // Simple mobile Safari audio using HTML5 Audio element
+  const createMobileSafariAudio = async () => {
+    try {
+      addDebugInfo('Creating mobile Safari audio...');
+      
+      // Create a simple beep tone using data URL
+      const sampleRate = 22050;
+      const duration = 2; // 2 seconds
+      const frequency = 440;
+      const samples = sampleRate * duration;
+      
+      // Generate wave data
+      const wave = new Array(samples);
+      for (let i = 0; i < samples; i++) {
+        wave[i] = Math.sin(2 * Math.PI * frequency * i / sampleRate) * 0.3;
+      }
+      
+      // Convert to WAV format (simplified)
+      const audioElement = new Audio();
+      audioElement.volume = 0.3;
+      
+      // Use a simple data URL beep
+      const audioUrl = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+D0wm4hBS13yvDZiTsOFGS49+ORQQ4ZZ7Pp3Z1OFQlHoeHzy2wiBSl0yO/WiTsOFGC49+OQQA4YZrPq3ZxNGQxJpN/yxm8jBSBrxu7VkUA9OA==';
+      audioElement.src = audioUrl;
+      
+      addDebugInfo('Audio element created with data URL');
+      
+      await audioElement.play();
+      addDebugInfo('Mobile Safari audio playing!');
+      
+      setUsingFallbackAudio(true);
+      return true;
+    } catch (error) {
+      addDebugInfo('Mobile Safari audio failed: ' + error.message);
+      return false;
+    }
+  };
+
   // Initialize audio system with platform detection
   const initAudio = async () => {
     try {
@@ -74,85 +119,66 @@ const useAudioEngine = () => {
         /iPad|iPhone|iPod/.test(navigator.userAgent) && 
         !window.MSStream;
       
-      console.log('=== AUDIO INITIALIZATION DEBUG ===');
-      console.log('Platform.OS:', Platform.OS);
-      console.log('navigator.userAgent:', navigator.userAgent);
-      console.log('isMobileSafari:', isMobileSafari);
-      console.log('window.AudioContext:', !!window.AudioContext);
-      console.log('window.webkitAudioContext:', !!window.webkitAudioContext);
+      addDebugInfo('=== AUDIO INIT ===');
+      addDebugInfo('Platform: ' + Platform.OS);
+      addDebugInfo('Mobile Safari: ' + isMobileSafari);
+      addDebugInfo('User Agent: ' + navigator.userAgent.slice(0, 50) + '...');
       
-      if (Platform.OS === 'web' && !isMobileSafari) {
-        // Use Web Audio API for desktop web
+      if (isMobileSafari) {
+        // For mobile Safari, try simple HTML5 Audio first
+        addDebugInfo('Trying mobile Safari HTML5 audio...');
+        const fallbackSuccess = await createMobileSafariAudio();
+        
+        if (fallbackSuccess) {
+          addDebugInfo('Mobile Safari fallback audio working!');
+          return;
+        }
+        
+        // If fallback fails, try Web Audio API with very simple setup
+        addDebugInfo('Fallback failed, trying Web Audio API...');
+        try {
+          if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            addDebugInfo('AudioContext created, state: ' + audioContextRef.current.state);
+            
+            gainNodeRef.current = audioContextRef.current.createGain();
+            gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
+            gainNodeRef.current.connect(audioContextRef.current.destination);
+            addDebugInfo('Gain node created and connected');
+          }
+          
+          if (audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+            addDebugInfo('AudioContext resumed to: ' + audioContextRef.current.state);
+          }
+        } catch (error) {
+          addDebugInfo('Web Audio failed: ' + error.message);
+        }
+      } else if (Platform.OS === 'web') {
+        // Desktop web - full Web Audio API
+        addDebugInfo('Setting up desktop Web Audio...');
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
           
-          // Create gain node for volume control
           gainNodeRef.current = audioContextRef.current.createGain();
           gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
           
-          // Create analyser for visualization
           analyserRef.current = audioContextRef.current.createAnalyser();
           analyserRef.current.fftSize = 2048;
           
-          // Connect: gainNode -> analyser -> destination
-          // (oscillator will connect to gainNode when created)
           gainNodeRef.current.connect(analyserRef.current);
           analyserRef.current.connect(audioContextRef.current.destination);
           
-          console.log('Web Audio API initialized, state:', audioContextRef.current.state);
+          addDebugInfo('Desktop Web Audio ready');
         }
         
-        // Resume AudioContext if suspended (required for all browsers after user interaction)
         if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
           await audioContextRef.current.resume();
-          console.log('AudioContext resumed after user interaction');
-        }
-      } else if (isMobileSafari) {
-        // Special handling for mobile Safari
-        console.log('=== MOBILE SAFARI AUDIO SETUP ===');
-        
-        if (!audioContextRef.current) {
-          try {
-            // Try creating AudioContext
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            console.log('AudioContextClass:', AudioContextClass);
-            
-            audioContextRef.current = new AudioContextClass();
-            console.log('AudioContext created, state:', audioContextRef.current.state);
-            console.log('AudioContext sampleRate:', audioContextRef.current.sampleRate);
-            console.log('AudioContext currentTime:', audioContextRef.current.currentTime);
-            
-            // Create gain node for volume control
-            gainNodeRef.current = audioContextRef.current.createGain();
-            console.log('Gain node created:', !!gainNodeRef.current);
-            
-            gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
-            console.log('Gain value set to 0.3');
-            
-            gainNodeRef.current.connect(audioContextRef.current.destination);
-            console.log('Gain connected to destination');
-            
-          } catch (error) {
-            console.error('Failed to create mobile Safari AudioContext:', error);
-            throw error;
-          }
-        }
-        
-        // Force resume on mobile Safari (critical!)
-        if (audioContextRef.current.state === 'suspended') {
-          console.log('AudioContext is suspended, attempting resume...');
-          try {
-            await audioContextRef.current.resume();
-            console.log('AudioContext resumed successfully, new state:', audioContextRef.current.state);
-          } catch (error) {
-            console.error('Failed to resume AudioContext:', error);
-            throw error;
-          }
-        } else {
-          console.log('AudioContext state is already:', audioContextRef.current.state);
+          addDebugInfo('Desktop AudioContext resumed');
         }
       } else {
-        // Use expo-audio for native mobile
+        // Native mobile - expo-audio
+        addDebugInfo('Setting up native mobile audio...');
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           staysActiveInBackground: false,
@@ -160,11 +186,11 @@ const useAudioEngine = () => {
           shouldDuckAndroid: true,
           playThroughEarpieceAndroid: false,
         });
-        console.log('Expo Audio initialized');
+        addDebugInfo('Native mobile audio ready');
       }
-      console.log('=== AUDIO INITIALIZATION COMPLETE ===');
+      addDebugInfo('=== AUDIO INIT COMPLETE ===');
     } catch (error) {
-      console.error('Failed to initialize audio:', error);
+      addDebugInfo('INIT FAILED: ' + error.message);
     }
   };
 
@@ -900,6 +926,20 @@ export default function App() {
         <Text style={styles.statusText}>
           Audio: {audioInitialized ? 'Ready' : 'Not initialized'}
         </Text>
+        
+        {/* On-screen debug info for mobile debugging */}
+        {debugInfo && (
+          <View style={styles.debugContainer}>
+            <Text style={styles.debugTitle}>Debug Info:</Text>
+            <Text style={styles.debugText}>{debugInfo}</Text>
+            <TouchableOpacity 
+              style={styles.clearDebugButton}
+              onPress={() => setDebugInfo('')}
+            >
+              <Text style={styles.clearDebugText}>Clear</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -1017,5 +1057,36 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     borderRadius: 10,
     minWidth: 2,
+  },
+  debugContainer: {
+    marginTop: 20,
+    padding: 10,
+    backgroundColor: '#222',
+    borderRadius: 5,
+    maxHeight: 200,
+    width: '90%',
+  },
+  debugTitle: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  debugText: {
+    color: '#ccc',
+    fontSize: 10,
+    fontFamily: 'monospace',
+    lineHeight: 12,
+  },
+  clearDebugButton: {
+    backgroundColor: '#444',
+    padding: 5,
+    borderRadius: 3,
+    alignSelf: 'flex-end',
+    marginTop: 5,
+  },
+  clearDebugText: {
+    color: 'white',
+    fontSize: 10,
   },
 });
