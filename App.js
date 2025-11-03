@@ -206,7 +206,7 @@ const useAudioEngine = () => {
   const generateWaveform = (freq, type, amp) => {
     return new Array(1024).fill(0).map((_, i) => {
       let sample;
-      const cycles = 8; // Show 8 complete cycles across the screen
+      const cycles = 4; // Show 4 complete cycles for better visibility
       const t = (i / 1024) * cycles * 2 * Math.PI;
       
       switch (type) {
@@ -217,11 +217,14 @@ const useAudioEngine = () => {
           sample = Math.sign(Math.sin(t));
           break;
         case 'sawtooth':
-          sample = 2 * ((t / (2 * Math.PI)) % 1) - 1;
+          // Proper sawtooth: linear ramp from -1 to 1, then instant drop
+          const sawPhase = (t / (2 * Math.PI)) % 1;
+          sample = 2 * sawPhase - 1;
           break;
         case 'triangle':
-          const sawtoothValue = 2 * ((t / (2 * Math.PI)) % 1) - 1;
-          sample = 2 * Math.abs(sawtoothValue) - 1;
+          // Proper triangle: up from -1 to 1, then down from 1 to -1
+          const triPhase = (t / (2 * Math.PI)) % 1;
+          sample = triPhase < 0.5 ? 4 * triPhase - 1 : 3 - 4 * triPhase;
           break;
         default:
           sample = Math.sin(t);
@@ -617,7 +620,8 @@ const useAudioEngine = () => {
 
   // Update real-time audio data from analyser
   const updateAudioData = () => {
-    if (Platform.OS === 'web' && analyserRef.current && isPlaying) {
+    // For desktop with Web Audio API and analyser
+    if (Platform.OS === 'web' && analyserRef.current && isPlaying && !(/iPad|iPhone|iPod/.test(navigator.userAgent))) {
       const bufferLength = analyserRef.current.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
       analyserRef.current.getByteTimeDomainData(dataArray);
@@ -627,42 +631,26 @@ const useAudioEngine = () => {
       const step = Math.max(1, Math.floor(bufferLength / 1024));
       for (let i = 0; i < bufferLength; i += step) {
         if (downsampledData.length < 1024) {
-          // Scale the real-time audio data by amplitude
-          const originalValue = dataArray[i];
-          const centered = originalValue - 128; // Center around 0
-          const scaled = centered * amplitude; // Apply amplitude scaling
-          const scaledValue = 128 + scaled; // Convert back to 0-255 range
-          downsampledData.push(Math.max(0, Math.min(255, scaledValue)));
+          // Use real audio data directly
+          downsampledData.push(dataArray[i]);
         }
       }
       
-      // Pad with generated data if we don't have enough real data
-      // This creates the artistic blending effect with real audio analysis
-      while (downsampledData.length < 1024) {
-        const t = (downsampledData.length * frequency) / 100;
-        let sample;
-        
-        switch (waveType) {
-          case 'sine': 
-            sample = Math.sin(t); 
-            break;
-          case 'square': 
-            sample = Math.sign(Math.sin(t)); 
-            break;
-          case 'sawtooth': 
-            sample = 2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5)); 
-            break;
-          case 'triangle': 
-            sample = 2 * Math.abs(2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5))) - 1; 
-            break;
-          default: 
-            sample = Math.sin(t);
+      // If we have enough real data, use it
+      if (downsampledData.length >= 512) {
+        // Pad to 1024 with the real data pattern
+        while (downsampledData.length < 1024) {
+          const sourceIndex = downsampledData.length % 512;
+          downsampledData.push(downsampledData[sourceIndex]);
         }
-        downsampledData.push(128 + sample * amplitude * 127);
+        setAudioData(downsampledData);
+        return;
       }
-      
-      setAudioData(downsampledData);
     }
+    
+    // For mobile Safari or when real audio data isn't available, use generated waveforms
+    const waveformData = generateWaveform(frequency, waveType, amplitude);
+    setAudioData(waveformData);
   };
 
   // Animation loop for real-time audio data
@@ -935,11 +923,11 @@ export default function App() {
 
   const handleVisualizerTouch = (x, y) => {
     const { width } = Dimensions.get('window');
-    // Map touch position to frequency (200Hz to 2000Hz)
+    // Map touch position to frequency (100Hz to 2000Hz)
     // Add safety checks to prevent NaN
     const safeX = isNaN(x) || x === undefined ? width / 2 : x;
     const clampedX = Math.max(0, Math.min(width, safeX));
-    const newFreq = 200 + (clampedX / width) * 1800;
+    const newFreq = 100 + (clampedX / width) * 1900;
     
     // Ensure frequency is valid
     if (!isNaN(newFreq) && isFinite(newFreq)) {
