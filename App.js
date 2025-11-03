@@ -356,40 +356,103 @@ const useAudioEngine = () => {
 
   const togglePlayback = async () => {
     try {
-      if (isPlaying) {
-        if (shouldUseWebAudio()) {
-          stopWebAudioOscillator();
+      // Detect mobile Safari for special handling
+      const isMobileSafari = Platform.OS === 'web' && 
+        /iPad|iPhone|iPod/.test(navigator.userAgent) && 
+        !window.MSStream;
+      
+      if (isMobileSafari) {
+        addDebugInfo('=== MOBILE SAFARI TOGGLE ===');
+        
+        if (isPlaying) {
+          // Stop audio
+          if (oscillatorRef.current) {
+            oscillatorRef.current.stop();
+            oscillatorRef.current = null;
+            addDebugInfo('Mobile Safari: oscillator stopped');
+          }
+          setIsPlaying(false);
         } else {
-          // Stop expo-av audio
-          if (soundRef.current) {
-            await soundRef.current.stopAsync();
-            await soundRef.current.unloadAsync();
-            soundRef.current = null;
+          // Start audio immediately - most direct approach
+          try {
+            addDebugInfo('Creating AudioContext directly in toggle...');
+            
+            if (!audioContextRef.current) {
+              audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+              addDebugInfo('AudioContext created, state: ' + audioContextRef.current.state);
+            }
+            
+            // CRITICAL: Resume MUST happen in direct user event handler
+            if (audioContextRef.current.state !== 'running') {
+              addDebugInfo('Resuming AudioContext in direct user event...');
+              await audioContextRef.current.resume();
+              addDebugInfo('AudioContext state after resume: ' + audioContextRef.current.state);
+            }
+            
+            // Create gain if needed
+            if (!gainNodeRef.current) {
+              gainNodeRef.current = audioContextRef.current.createGain();
+              gainNodeRef.current.connect(audioContextRef.current.destination);
+              addDebugInfo('Gain node created and connected');
+            }
+            
+            // Create and start oscillator immediately
+            const osc = audioContextRef.current.createOscillator();
+            osc.frequency.setValueAtTime(frequency, audioContextRef.current.currentTime);
+            osc.type = waveType;
+            osc.connect(gainNodeRef.current);
+            
+            // Set volume
+            gainNodeRef.current.gain.setValueAtTime(amplitude * 0.3, audioContextRef.current.currentTime);
+            
+            osc.start(audioContextRef.current.currentTime);
+            oscillatorRef.current = osc;
+            
+            addDebugInfo('Mobile Safari: oscillator started directly!');
+            setIsPlaying(true);
+            
+          } catch (error) {
+            addDebugInfo('Mobile Safari direct toggle failed: ' + error.message);
           }
         }
-        setIsPlaying(false);
-        console.log('Audio stopped');
       } else {
-        if (shouldUseWebAudio()) {
-          // Aggressive AudioContext resumption for mobile Safari
-          if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-            await audioContextRef.current.resume();
-            console.log('AudioContext aggressively resumed before playback');
+        // Desktop/other platforms - original logic
+        if (isPlaying) {
+          if (shouldUseWebAudio()) {
+            stopWebAudioOscillator();
+          } else {
+            // Stop expo-av audio
+            if (soundRef.current) {
+              await soundRef.current.stopAsync();
+              await soundRef.current.unloadAsync();
+              soundRef.current = null;
+            }
           }
-          startWebAudioOscillator();
+          setIsPlaying(false);
+          console.log('Audio stopped');
         } else {
-          // For mobile, we'd need to generate or load audio files
-          // This is a placeholder for now
-          console.log('Mobile audio playback would start here');
+          if (shouldUseWebAudio()) {
+            // Aggressive AudioContext resumption for mobile Safari
+            if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+              await audioContextRef.current.resume();
+              console.log('AudioContext aggressively resumed before playback');
+            }
+            startWebAudioOscillator();
+          } else {
+            // For mobile, we'd need to generate or load audio files
+            // This is a placeholder for now
+            console.log('Mobile audio playback would start here');
+          }
+          setIsPlaying(true);
+          console.log('Audio started');
         }
-        setIsPlaying(true);
-        console.log('Audio started');
       }
       
       // Update visualization
       const waveformData = generateWaveform(frequency, waveType, amplitude);
       setAudioData(waveformData);
     } catch (error) {
+      addDebugInfo('Toggle playback failed: ' + error.message);
       console.error('Failed to toggle playback:', error);
     }
   };
@@ -942,14 +1005,16 @@ export default function App() {
         {/* On-screen debug info for mobile debugging */}
         {debugInfo && (
           <View style={styles.debugContainer}>
-            <Text style={styles.debugTitle}>Debug Info:</Text>
+            <View style={styles.debugHeader}>
+              <Text style={styles.debugTitle}>Debug Info:</Text>
+              <TouchableOpacity 
+                style={styles.clearDebugButton}
+                onPress={clearDebugInfo}
+              >
+                <Text style={styles.clearDebugText}>✕ Clear</Text>
+              </TouchableOpacity>
+            </View>
             <Text style={styles.debugText}>{debugInfo}</Text>
-            <TouchableOpacity 
-              style={styles.clearDebugButton}
-              onPress={clearDebugInfo}
-            >
-              <Text style={styles.clearDebugText}>Clear</Text>
-            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -1078,11 +1143,16 @@ const styles = StyleSheet.create({
     maxHeight: 200,
     width: '90%',
   },
+  debugHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
   debugTitle: {
     color: '#007AFF',
     fontSize: 14,
     fontWeight: 'bold',
-    marginBottom: 5,
   },
   debugText: {
     color: '#ccc',
@@ -1091,14 +1161,15 @@ const styles = StyleSheet.create({
     lineHeight: 12,
   },
   clearDebugButton: {
-    backgroundColor: '#444',
-    padding: 5,
-    borderRadius: 3,
-    alignSelf: 'flex-end',
-    marginTop: 5,
+    backgroundColor: '#007AFF',
+    padding: 8,
+    borderRadius: 5,
+    minWidth: 60,
+    alignItems: 'center',
   },
   clearDebugText: {
     color: 'white',
-    fontSize: 10,
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });
