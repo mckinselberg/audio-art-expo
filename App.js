@@ -54,16 +54,39 @@ const useAudioEngine = () => {
     return buffer;
   };
 
-  // Volume compensation matrix for different waveforms
-  // Based on RMS (Root Mean Square) and perceived loudness
-  const getVolumeCompensation = (waveType) => {
-    const compensationMatrix = {
+  // Volume compensation matrix for different waveforms and frequency attenuation
+  // Based on RMS (Root Mean Square), perceived loudness, and frequency response
+  const getVolumeCompensation = (waveType, frequency = 440) => {
+    // Base compensation for waveform types
+    const waveCompensation = {
       'sine': 1.0,      // Reference level (smoothest waveform)
       'triangle': 0.7,  // Triangle waves are louder due to more harmonic content
       'sawtooth': 0.5,  // Sawtooth is much louder due to rich harmonics
       'square': 0.3     // Square waves are loudest due to fundamental + odd harmonics
     };
-    return compensationMatrix[waveType] || 1.0;
+    
+    // Frequency-based attenuation for comfort
+    // Higher frequencies are more piercing and need more attenuation
+    const getFrequencyAttenuation = (freq) => {
+      if (freq <= 200) {
+        // Very low frequencies: slight boost for audibility
+        return 1.2;
+      } else if (freq <= 1000) {
+        // Mid frequencies: neutral (most comfortable range)
+        return 1.0;
+      } else if (freq <= 4000) {
+        // High frequencies: gentle attenuation
+        return Math.pow(1000 / freq, 0.3);
+      } else {
+        // Very high frequencies: stronger attenuation
+        return Math.pow(1000 / freq, 0.5);
+      }
+    };
+    
+    const waveComp = waveCompensation[waveType] || 1.0;
+    const freqAtten = getFrequencyAttenuation(frequency);
+    
+    return waveComp * freqAtten;
   };
 
   // Simple mobile Safari audio using existing AudioContext
@@ -261,7 +284,7 @@ const useAudioEngine = () => {
         
         // Set volume with safety check and waveform compensation
         const safeAmplitude = isNaN(amplitude) || !isFinite(amplitude) ? 0.3 : amplitude;
-        const compensation = getVolumeCompensation(waveTypeParam);
+        const compensation = getVolumeCompensation(waveTypeParam, safeFreq);
         const adjustedGain = safeAmplitude * 0.8 * compensation;
         gainNodeRef.current.gain.setValueAtTime(adjustedGain, audioContextRef.current.currentTime);
         
@@ -311,7 +334,7 @@ const useAudioEngine = () => {
       oscillatorRef.current.frequency.setValueAtTime(safeFreq, audioContextRef.current.currentTime);
       
       // Update gain with volume compensation
-      const compensation = getVolumeCompensation(waveType);
+      const compensation = getVolumeCompensation(waveType, safeFreq);
       const adjustedGain = safeAmplitude * 0.8 * compensation;
       gainNodeRef.current.gain.setValueAtTime(adjustedGain, audioContextRef.current.currentTime);
       
@@ -547,8 +570,8 @@ const useAudioEngine = () => {
     
     // Update Web Audio gain immediately if nodes exist
     if (Platform.OS === 'web' && gainNodeRef.current && audioContextRef.current) {
-      // Apply volume compensation based on current waveform
-      const compensation = getVolumeCompensation(waveType);
+      // Apply volume compensation based on current waveform and frequency
+      const compensation = getVolumeCompensation(waveType, frequency);
       const gainValue = clampedAmplitude * 0.8 * compensation;
       try {
         gainNodeRef.current.gain.setValueAtTime(gainValue, audioContextRef.current.currentTime);
@@ -878,11 +901,18 @@ export default function App() {
 
   const handleVisualizerTouch = (x, y) => {
     const { width } = Dimensions.get('window');
-    // Map touch position to frequency (100Hz to 2000Hz)
-    // Add safety checks to prevent NaN
+    // Map touch position to frequency (20Hz to 20kHz - full human hearing range)
+    // Use logarithmic scaling for more natural frequency distribution
     const safeX = isNaN(x) || x === undefined ? width / 2 : x;
     const clampedX = Math.max(0, Math.min(width, safeX));
-    const newFreq = 100 + (clampedX / width) * 1900;
+    
+    // Logarithmic frequency mapping for better musical intervals
+    const minFreq = 20;   // 20Hz - lowest human hearing
+    const maxFreq = 20000; // 20kHz - highest human hearing
+    const logMin = Math.log(minFreq);
+    const logMax = Math.log(maxFreq);
+    const logFreq = logMin + (clampedX / width) * (logMax - logMin);
+    const newFreq = Math.exp(logFreq);
     
     // Ensure frequency is valid
     if (!isNaN(newFreq) && isFinite(newFreq)) {
@@ -933,7 +963,7 @@ export default function App() {
         </TouchableOpacity>
         
         <Text style={styles.frequencyText}>
-          Frequency: {Math.round(frequency)}Hz
+          Frequency: {frequency >= 1000 ? `${(frequency / 1000).toFixed(1)}kHz` : `${Math.round(frequency)}Hz`}
         </Text>
         
         <View style={styles.waveTypeContainer}>
