@@ -4,6 +4,28 @@ import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Platform } from '
 import { Svg, Path } from 'react-native-svg';
 import { Audio } from 'expo-audio';
 
+// Debug hook for development and troubleshooting
+const useDebug = (enabled = false) => {
+  const [debugInfo, setDebugInfo] = useState('');
+
+  const addDebugInfo = (message) => {
+    if (enabled) {
+      console.log(message);
+      setDebugInfo(prev => prev + '\n' + message);
+    }
+  };
+
+  const clearDebugInfo = () => {
+    setDebugInfo('');
+  };
+
+  return {
+    debugInfo,
+    addDebugInfo,
+    clearDebugInfo
+  };
+};
+
 // Real audio engine with platform-aware synthesis
 const useAudioEngine = () => {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -69,11 +91,17 @@ const useAudioEngine = () => {
   // Simple mobile Safari audio using existing AudioContext
   const createMobileSafariAudio = async () => {
     try {
+      
+      
       // Since AudioContext is created but suspended, let's try to use it directly
       if (audioContextRef.current) {
+        
+        
         // Force resume more aggressively
         if (audioContextRef.current.state === 'suspended') {
+          
           await audioContextRef.current.resume();
+          
         }
         
         // Try creating a simple oscillator immediately
@@ -84,17 +112,19 @@ const useAudioEngine = () => {
           testOsc.start();
           testOsc.stop(audioContextRef.current.currentTime + 0.2); // 200ms beep
           
+          
           setUsingFallbackAudio(false); // Use Web Audio, not fallback
           return true;
         } catch (oscError) {
-          console.warn('Oscillator test failed:', oscError.message);
+          
           return false;
         }
       }
       
+      
       return false;
     } catch (error) {
-      console.warn('Direct Web Audio failed:', error.message);
+      
       return false;
     }
   };
@@ -107,32 +137,44 @@ const useAudioEngine = () => {
         /iPad|iPhone|iPod/.test(navigator.userAgent) && 
         !window.MSStream;
       
+      
+      
+      
+       + '...');
+      
       if (isMobileSafari) {
         // For mobile Safari, try simple HTML5 Audio first
+        
         const fallbackSuccess = await createMobileSafariAudio();
         
         if (fallbackSuccess) {
+          
           return;
         }
         
         // If fallback fails, try Web Audio API with very simple setup
+        
         try {
           if (!audioContextRef.current) {
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
             
+            
             gainNodeRef.current = audioContextRef.current.createGain();
             gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
             gainNodeRef.current.connect(audioContextRef.current.destination);
+            
           }
           
           if (audioContextRef.current.state === 'suspended') {
             await audioContextRef.current.resume();
+            
           }
         } catch (error) {
-          console.warn('Web Audio failed:', error.message);
+          
         }
       } else if (Platform.OS === 'web') {
         // Desktop web - full Web Audio API
+        
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
           
@@ -144,13 +186,17 @@ const useAudioEngine = () => {
           
           gainNodeRef.current.connect(analyserRef.current);
           analyserRef.current.connect(audioContextRef.current.destination);
+          
+          
         }
         
         if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
           await audioContextRef.current.resume();
+          
         }
       } else {
         // Native mobile - expo-audio
+        
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           staysActiveInBackground: false,
@@ -158,9 +204,11 @@ const useAudioEngine = () => {
           shouldDuckAndroid: true,
           playThroughEarpieceAndroid: false,
         });
+        
       }
+      
     } catch (error) {
-      console.error('Audio initialization failed:', error.message);
+      
     }
   };
 
@@ -327,19 +375,25 @@ const useAudioEngine = () => {
         !window.MSStream;
       
       if (isMobileSafari) {
+        
+        
         if (isPlaying) {
           // Stop audio
           if (audioElementRef.current) {
             audioElementRef.current.pause();
             audioElementRef.current = null;
+            
           }
           if (oscillatorRef.current) {
             oscillatorRef.current.stop();
             oscillatorRef.current = null;
+            
           }
           setIsPlaying(false);
         } else {
           // Standard mobile Safari approach - HTML5 Audio first
+          
+          
           try {
             // Create audio element in direct user gesture (CRITICAL)
             const audio = document.createElement('audio');
@@ -389,25 +443,29 @@ const useAudioEngine = () => {
             audio.src = url;
             audio.volume = 0.3;
             
+            
+            
             // CRITICAL: play() must be called synchronously in user gesture
             const playPromise = audio.play();
             
             if (playPromise) {
               playPromise.then(() => {
+                
                 audioElementRef.current = audio;
                 setIsPlaying(true);
               }).catch(error => {
-                console.warn('HTML5 Audio play failed:', error.message);
+                
                 // Fallback to Web Audio
                 tryWebAudioFallback();
               });
             } else {
+              
               audioElementRef.current = audio;
               setIsPlaying(true);
             }
             
           } catch (error) {
-            console.warn('HTML5 Audio creation failed:', error.message);
+            
             tryWebAudioFallback();
           }
         }
@@ -444,12 +502,14 @@ const useAudioEngine = () => {
       const waveformData = generateWaveform(frequency, waveType, amplitude);
       setAudioData(waveformData);
     } catch (error) {
+      
       console.error('Failed to toggle playback:', error);
     }
   };
 
   // Fallback function for mobile Safari
   const tryWebAudioFallback = () => {
+    
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const oscillator = audioContext.createOscillator();
@@ -468,9 +528,10 @@ const useAudioEngine = () => {
       oscillatorRef.current = oscillator;
       gainNodeRef.current = gainNode;
       
+      
       setIsPlaying(true);
     } catch (error) {
-      console.warn('Web Audio fallback failed:', error.message);
+      
     }
   };
 
@@ -678,7 +739,9 @@ const useAudioEngine = () => {
     frequency,
     waveType,
     amplitude,
-    audioData
+    audioData,
+    debugInfo,
+    clearDebugInfo
   };
 };
 
@@ -872,7 +935,9 @@ export default function App() {
     frequency, 
     waveType,
     amplitude,
-    audioData
+    audioData,
+    debugInfo,
+    clearDebugInfo
   } = useAudioEngine();
   const [audioInitialized, setAudioInitialized] = useState(false);
 
@@ -1009,6 +1074,22 @@ export default function App() {
         <Text style={styles.statusText}>
           Audio: {audioInitialized ? 'Ready' : 'Not initialized'}
         </Text>
+        
+        {/* On-screen debug info for mobile debugging */}
+        {debugInfo && (
+          <View style={styles.debugContainer}>
+            <View style={styles.debugHeader}>
+              <Text style={styles.debugTitle}>Debug Info:</Text>
+              <TouchableOpacity 
+                style={styles.clearDebugButton}
+                onPress={clearDebugInfo}
+              >
+                <Text style={styles.clearDebugText}>✕ Clear</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.debugText}>{debugInfo}</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -1126,5 +1207,42 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     borderRadius: 10,
     minWidth: 2,
+  },
+  debugContainer: {
+    marginTop: 20,
+    padding: 10,
+    backgroundColor: '#222',
+    borderRadius: 5,
+    maxHeight: 200,
+    width: '90%',
+  },
+  debugHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  debugTitle: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  debugText: {
+    color: '#ccc',
+    fontSize: 10,
+    fontFamily: 'monospace',
+    lineHeight: 12,
+  },
+  clearDebugButton: {
+    backgroundColor: '#007AFF',
+    padding: 8,
+    borderRadius: 5,
+    minWidth: 60,
+    alignItems: 'center',
+  },
+  clearDebugText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });
