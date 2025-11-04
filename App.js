@@ -742,11 +742,54 @@ const useAudioEngine = () => {
 
 // SVG-based waveform visualization component
 const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
-  const { width, height } = Dimensions.get('window');
-  const visualizerHeight = height * 0.7;
+  const [screenData, setScreenData] = useState(() => {
+    const { width, height } = Dimensions.get('window');
+    return { width, height };
+  });
+  
   const [isDragging, setIsDragging] = useState(false);
   const [animationOffset, setAnimationOffset] = useState(0);
   const animationRef = useRef();
+
+  // Listen for orientation changes and screen size updates
+  useEffect(() => {
+    const subscription = Dimensions.addEventListener('change', ({ window }) => {
+      setScreenData({ width: window.width, height: window.height });
+    });
+
+    return () => subscription?.remove();
+  }, []);
+
+  // Calculate responsive dimensions
+  const getResponsiveDimensions = () => {
+    const { width, height } = screenData;
+    const isLandscape = width > height;
+    
+    // Adjust visualizer height based on orientation and screen size
+    let visualizerHeight;
+    if (isLandscape) {
+      // In landscape, use more of the available height
+      visualizerHeight = Math.max(200, height * 0.5);
+    } else {
+      // In portrait, standard allocation but ensure minimum height
+      visualizerHeight = Math.max(250, height * 0.65);
+    }
+    
+    // Ensure visualizer doesn't get too large on very big screens
+    visualizerHeight = Math.min(visualizerHeight, 600);
+    
+    return {
+      width,
+      height,
+      visualizerHeight,
+      isLandscape,
+      // Scale factors for different screen densities
+      amplitudeScale: Math.min(1.5, width / 375), // Base on iPhone SE width
+      strokeWidth: Math.max(1.5, Math.min(3, width / 200))
+    };
+  };
+
+  const dimensions = getResponsiveDimensions();
 
   // Animation loop for flowing waveform
   useEffect(() => {
@@ -757,7 +800,7 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
         const elapsed = currentTime - startTime;
         
         // Move smoothly based on time, not frame rate
-        setAnimationOffset((elapsed * 0.05) % width); // Slower, smoother movement
+        setAnimationOffset((elapsed * 0.05) % dimensions.width); // Slower, smoother movement
         animationRef.current = requestAnimationFrame(animate);
       };
       animationRef.current = requestAnimationFrame(animate);
@@ -773,12 +816,13 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [isPlaying, width]);
+  }, [isPlaying, dimensions.width]);
 
-  // Generate SVG path from audio data with animation
+  // Generate SVG path from audio data with responsive dimensions
   const generatePath = () => {
     if (!audioData || audioData.length === 0) return '';
 
+    const { width, visualizerHeight, amplitudeScale } = dimensions;
     const sliceWidth = width / audioData.length;
     let pathData = '';
 
@@ -788,9 +832,10 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
       // Safety check for NaN values
       const safeValue = isNaN(value) || !isFinite(value) ? 128 : value;
       
-      // Center the waveform and scale it properly
+      // Center the waveform and scale it properly with responsive amplitude
       const centerY = visualizerHeight / 2;
-      const amplitude = visualizerHeight * 0.35; // Use 35% of height for better visibility
+      const baseAmplitude = visualizerHeight * 0.3; // Base amplitude
+      const amplitude = baseAmplitude * amplitudeScale; // Scale for screen size
       
       // Normalize value from 0-255 range to -1 to 1 range, ensuring proper centering
       const normalizedValue = (safeValue - 128) / 127; // Use 127 instead of 128 for symmetric range
@@ -825,7 +870,7 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
     // Calculate relative X position within the visualizer
     const relativeX = pageX - (event.nativeEvent.target?.offsetLeft || 0);
     
-    console.log('Responder move:', { pageX, relativeX, width });
+    console.log('Responder move:', { pageX, relativeX, width: dimensions.width });
     
     if (!isNaN(relativeX) && isFinite(relativeX)) {
       onTouch && onTouch(relativeX, 0);
@@ -850,7 +895,7 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
 
   return (
     <View 
-      style={[styles.visualizer, { height: visualizerHeight }]}
+      style={[styles.visualizer, { height: dimensions.visualizerHeight }]}
       onStartShouldSetResponder={() => true}
       onMoveShouldSetResponder={() => true}
       onResponderGrant={handleResponderGrant}
@@ -859,27 +904,27 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
       onResponderTerminate={handleResponderRelease}
     >
       <Svg 
-        width={width} 
-        height={visualizerHeight}
+        width={dimensions.width} 
+        height={dimensions.visualizerHeight}
       >
-        {/* Background grid */}
+        {/* Background grid - responsive grid lines */}
         {isPlaying && (
           <>
             {/* Horizontal lines */}
             {Array.from({ length: 5 }, (_, i) => (
               <Path
                 key={`grid-h-${i}`}
-                d={`M 0 ${(i * visualizerHeight) / 4} L ${width} ${(i * visualizerHeight) / 4}`}
+                d={`M 0 ${(i * dimensions.visualizerHeight) / 4} L ${dimensions.width} ${(i * dimensions.visualizerHeight) / 4}`}
                 stroke="#333"
                 strokeWidth="1"
                 opacity="0.2"
               />
             ))}
-            {/* Vertical lines */}
-            {Array.from({ length: 9 }, (_, i) => (
+            {/* Vertical lines - adjust count based on screen width */}
+            {Array.from({ length: Math.min(9, Math.floor(dimensions.width / 50)) }, (_, i) => (
               <Path
                 key={`grid-v-${i}`}
-                d={`M ${(i * width) / 8} 0 L ${(i * width) / 8} ${visualizerHeight}`}
+                d={`M ${(i * dimensions.width) / (Math.min(8, Math.floor(dimensions.width / 50) - 1))} 0 L ${(i * dimensions.width) / (Math.min(8, Math.floor(dimensions.width / 50) - 1))} ${dimensions.visualizerHeight}`}
                 stroke="#333"
                 strokeWidth="1"
                 opacity="0.2"
@@ -887,7 +932,7 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
             ))}
             {/* Center line */}
             <Path
-              d={`M 0 ${visualizerHeight / 2} L ${width} ${visualizerHeight / 2}`}
+              d={`M 0 ${dimensions.visualizerHeight / 2} L ${dimensions.width} ${dimensions.visualizerHeight / 2}`}
               stroke="#555"
               strokeWidth="1"
               opacity="0.4"
@@ -895,21 +940,21 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
           </>
         )}
         
-        {/* Main waveform */}
+        {/* Main waveform with responsive stroke width */}
         <Path
           d={generatePath()}
           stroke={isPlaying ? "#007AFF" : "#666"}
-          strokeWidth="2.5"
+          strokeWidth={dimensions.strokeWidth}
           fill="none"
           opacity={isPlaying ? 1.0 : 0.7}
         />
         
-        {/* Glow effect when playing */}
+        {/* Glow effect when playing - responsive */}
         {isPlaying && (
           <Path
             d={generatePath()}
             stroke="#007AFF"
-            strokeWidth="5"
+            strokeWidth={dimensions.strokeWidth * 2}
             fill="none"
             opacity="0.3"
           />
