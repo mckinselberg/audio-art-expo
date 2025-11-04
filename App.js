@@ -741,7 +741,7 @@ const useAudioEngine = () => {
 };
 
 // SVG-based waveform visualization component
-const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
+const WaveformVisualizer = ({ audioData, onTouch, isPlaying, theme }) => {
   const [screenData, setScreenData] = useState(() => {
     const { width, height } = Dimensions.get('window');
     return { width, height };
@@ -940,20 +940,20 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
           </>
         )}
         
-        {/* Main waveform with responsive stroke width */}
+        {/* Main waveform with responsive stroke width and theme colors */}
         <Path
           d={generatePath()}
-          stroke={isPlaying ? "#007AFF" : "#666"}
+          stroke={isPlaying ? theme.primary : "#666"}
           strokeWidth={dimensions.strokeWidth}
           fill="none"
           opacity={isPlaying ? 1.0 : 0.7}
         />
         
-        {/* Glow effect when playing - responsive */}
+        {/* Glow effect when playing - responsive with theme colors */}
         {isPlaying && (
           <Path
             d={generatePath()}
-            stroke="#007AFF"
+            stroke={theme.accent}
             strokeWidth={dimensions.strokeWidth * 2}
             fill="none"
             opacity="0.3"
@@ -981,6 +981,20 @@ export default function App() {
     audioData
   } = useAudioEngine();
   const [audioInitialized, setAudioInitialized] = useState(false);
+
+  // Theme system with predefined color schemes
+  const themes = [
+    { name: 'Blue', primary: '#007AFF', secondary: '#0056CC', accent: '#66B2FF' },
+    { name: 'Green', primary: '#34C759', secondary: '#248A3D', accent: '#5DD87E' },
+    { name: 'Purple', primary: '#AF52DE', secondary: '#7C37A3', accent: '#C98AEB' },
+    { name: 'Orange', primary: '#FF9500', secondary: '#CC7700', accent: '#FFB84D' },
+    { name: 'Red', primary: '#FF3B30', secondary: '#CC2E25', accent: '#FF7069' },
+    { name: 'Pink', primary: '#FF2D92', secondary: '#CC2475', accent: '#FF66AA' },
+    { name: 'Teal', primary: '#5AC8FA', secondary: '#48A0C8', accent: '#7DD3FC' }
+  ];
+
+  const [currentTheme, setCurrentTheme] = useState(0);
+  const theme = themes[currentTheme];
 
   const handleVisualizerTouch = (x, y) => {
     const { width } = Dimensions.get('window');
@@ -1033,11 +1047,32 @@ export default function App() {
         audioData={audioData}
         onTouch={handleVisualizerTouch}
         isPlaying={isPlaying}
+        theme={theme}
       />
       
       <View style={styles.controls}>
+        {/* Theme Selector */}
+        <View style={styles.themeContainer}>
+          <View style={styles.themeSelector}>
+            {themes.map((themeOption, index) => (
+              <TouchableOpacity
+                key={themeOption.name}
+                style={[
+                  styles.themeCircle,
+                  { backgroundColor: themeOption.primary },
+                  currentTheme === index && styles.themeCircleActive
+                ]}
+                onPress={() => setCurrentTheme(index)}
+              />
+            ))}
+          </View>
+        </View>
+        
         <TouchableOpacity 
-          style={[styles.button, isPlaying && styles.buttonActive]}
+          style={[
+            styles.button, 
+            { backgroundColor: isPlaying ? theme.secondary : theme.primary }
+          ]}
           onPress={handleButtonPress}
         >
           <Text style={styles.buttonText}>
@@ -1057,7 +1092,7 @@ export default function App() {
                 key={type}
                 style={[
                   styles.waveTypeButton,
-                  waveType === type && styles.waveTypeButtonActive
+                  waveType === type && { backgroundColor: theme.primary }
                 ]}
                 onPress={() => updateWaveType(type)}
               >
@@ -1104,7 +1139,13 @@ export default function App() {
               <Text style={styles.amplitudeButtonText}>-</Text>
             </TouchableOpacity>
             <View style={styles.amplitudeTrack}>
-              <View style={[styles.amplitudeBar, { width: `${amplitude * 100}%` }]} />
+              <View style={[
+                styles.amplitudeBar, 
+                { 
+                  width: `${amplitude * 100}%`,
+                  backgroundColor: theme.primary
+                }
+              ]} />
             </View>
             <TouchableOpacity
               style={styles.amplitudeButton}
@@ -1152,7 +1193,7 @@ export default function App() {
             <View style={styles.amplitudeTrack}>
               <View style={[styles.amplitudeBar, { 
                 width: `${highFreqAttenuation * 100}%`,
-                backgroundColor: '#FF6B6B' // Different color for attenuation
+                backgroundColor: theme.secondary // Use secondary theme color for distinction
               }]} />
             </View>
             <TouchableOpacity
@@ -1206,6 +1247,32 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  themeContainer: {
+    marginBottom: 20,
+    alignItems: 'center',
+  },
+  themeSelector: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 5,
+  },
+  themeCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  themeCircleActive: {
+    borderColor: 'white',
+    shadowColor: 'white',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 5,
   },
   frequencyText: {
     color: 'white',
