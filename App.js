@@ -10,6 +10,7 @@ const useAudioEngine = () => {
   const [frequency, setFrequency] = useState(440);
   const [waveType, setWaveType] = useState('sine');
   const [amplitude, setAmplitude] = useState(0.3);
+  const [highFreqAttenuation, setHighFreqAttenuation] = useState(0.5); // 0 = no attenuation, 1 = maximum attenuation
   const [audioData, setAudioData] = useState(new Array(1024).fill(128));
   const soundRef = useRef(null);
   
@@ -55,8 +56,8 @@ const useAudioEngine = () => {
   };
 
   // Volume compensation matrix for different waveforms and frequency attenuation
-  // Based on RMS (Root Mean Square), perceived loudness, and frequency response
-  const getVolumeCompensation = (waveType, frequency = 440) => {
+  // Based on RMS (Root Mean Square), perceived loudness, and user-controlled frequency response
+  const getVolumeCompensation = (waveType, frequency = 440, attenuationLevel = highFreqAttenuation) => {
     // Base compensation for waveform types
     const waveCompensation = {
       'sine': 1.0,      // Reference level (smoothest waveform)
@@ -65,26 +66,30 @@ const useAudioEngine = () => {
       'square': 0.3     // Square waves are loudest due to fundamental + odd harmonics
     };
     
-    // Frequency-based attenuation for comfort
-    // Higher frequencies are more piercing and need more attenuation
-    const getFrequencyAttenuation = (freq) => {
+    // User-controlled frequency-based attenuation
+    // attenuationLevel: 0 = no attenuation, 1 = maximum attenuation
+    const getFrequencyAttenuation = (freq, userAttenuation) => {
       if (freq <= 200) {
-        // Very low frequencies: slight boost for audibility
+        // Very low frequencies: slight boost for audibility (not affected by attenuation control)
         return 1.2;
       } else if (freq <= 1000) {
-        // Mid frequencies: neutral (most comfortable range)
-        return 1.0;
+        // Mid frequencies: neutral (most comfortable range, minimal attenuation effect)
+        return 1.0 - (userAttenuation * 0.1); // Slight reduction at max attenuation
       } else if (freq <= 4000) {
-        // High frequencies: gentle attenuation
-        return Math.pow(1000 / freq, 0.3);
+        // High frequencies: user-controlled gentle attenuation
+        const baseAttenuation = Math.pow(1000 / freq, 0.2); // Gentler base curve
+        const userEffect = Math.pow(1000 / freq, userAttenuation * 0.6); // User control
+        return baseAttenuation * userEffect;
       } else {
-        // Very high frequencies: stronger attenuation
-        return Math.pow(1000 / freq, 0.5);
+        // Very high frequencies: user-controlled stronger attenuation
+        const baseAttenuation = Math.pow(1000 / freq, 0.3); // Moderate base curve
+        const userEffect = Math.pow(1000 / freq, userAttenuation * 0.8); // Strong user control
+        return baseAttenuation * userEffect;
       }
     };
     
     const waveComp = waveCompensation[waveType] || 1.0;
-    const freqAtten = getFrequencyAttenuation(frequency);
+    const freqAtten = getFrequencyAttenuation(frequency, attenuationLevel);
     
     return waveComp * freqAtten;
   };
@@ -590,6 +595,34 @@ const useAudioEngine = () => {
     console.log('=== updateAmplitude complete ===');
   };
 
+  const updateHighFreqAttenuation = async (newAttenuation) => {
+    // Validate attenuation value (0 to 1)
+    if (isNaN(newAttenuation) || !isFinite(newAttenuation)) {
+      console.warn('Invalid attenuation:', newAttenuation);
+      return;
+    }
+    
+    const clampedAttenuation = Math.max(0, Math.min(1, newAttenuation));
+    setHighFreqAttenuation(clampedAttenuation);
+    console.log('High frequency attenuation updated:', clampedAttenuation);
+    
+    // Update Web Audio gain immediately if oscillator is playing
+    if (Platform.OS === 'web' && gainNodeRef.current && audioContextRef.current && isPlaying) {
+      const compensation = getVolumeCompensation(waveType, frequency, clampedAttenuation);
+      const gainValue = amplitude * 0.8 * compensation;
+      try {
+        gainNodeRef.current.gain.setValueAtTime(gainValue, audioContextRef.current.currentTime);
+        console.log('Gain updated for new attenuation:', gainValue, 'attenuation level:', clampedAttenuation);
+      } catch (error) {
+        console.error('Error updating gain for attenuation:', error);
+      }
+    }
+    
+    // Update visualization
+    const waveformData = generateWaveform(frequency, waveType, amplitude);
+    setAudioData(waveformData);
+  };
+
   // Update real-time audio data from analyser
   const updateAudioData = () => {
     // For desktop with Web Audio API and analyser (exclude mobile Safari)
@@ -697,10 +730,12 @@ const useAudioEngine = () => {
     updateFrequency,
     updateWaveType,
     updateAmplitude,
+    updateHighFreqAttenuation,
     isPlaying,
     frequency,
     waveType,
     amplitude,
+    highFreqAttenuation,
     audioData
   };
 };
@@ -755,10 +790,10 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
       
       // Center the waveform and scale it properly
       const centerY = visualizerHeight / 2;
-      const amplitude = visualizerHeight * 0.3; // Use 30% of height for amplitude
+      const amplitude = visualizerHeight * 0.35; // Use 35% of height for better visibility
       
-      // Normalize value from 0-255 range to -1 to 1 range
-      const normalizedValue = (safeValue - 128) / 128;
+      // Normalize value from 0-255 range to -1 to 1 range, ensuring proper centering
+      const normalizedValue = (safeValue - 128) / 127; // Use 127 instead of 128 for symmetric range
       
       // Add smooth flowing animation when playing - preserve waveform characteristics
       const phaseOffset = isPlaying ? (animationOffset * 0.01 + index * 0.05) : 0;
@@ -766,9 +801,10 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying }) => {
         ? normalizedValue + Math.sin(phaseOffset) * 0.05 // Subtle flow without distorting waveform shape
         : normalizedValue;
       
-      const y = centerY + (animatedValue * amplitude);
+      // Ensure the waveform is properly centered around centerY
+      const y = centerY - (animatedValue * amplitude); // Subtract to invert Y axis (SVG coordinates)
       
-      // Ensure x and y are valid numbers
+      // Ensure x and y are valid numbers and within bounds
       const safeX = isNaN(x) || !isFinite(x) ? 0 : Math.max(0, Math.min(width, x));
       const safeY = isNaN(y) || !isFinite(y) ? centerY : Math.max(0, Math.min(visualizerHeight, y));
       
@@ -891,10 +927,12 @@ export default function App() {
     updateFrequency, 
     updateWaveType, 
     updateAmplitude,
+    updateHighFreqAttenuation,
     isPlaying, 
     frequency, 
     waveType,
     amplitude,
+    highFreqAttenuation,
     audioData
   } = useAudioEngine();
   const [audioInitialized, setAudioInitialized] = useState(false);
@@ -1029,6 +1067,54 @@ export default function App() {
                 const newValue = Math.min(1.0, amplitude + 0.1);
                 console.log('Plus button: current =', amplitude, 'new =', newValue);
                 updateAmplitude(newValue);
+              }}
+            >
+              <Text style={styles.amplitudeButtonText}>+</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        
+        <View style={styles.amplitudeContainer}>
+          <Text style={styles.labelText}>
+            High Freq Attenuation: {Math.round(highFreqAttenuation * 100)}%
+          </Text>
+          <View 
+            style={styles.amplitudeSlider}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={(evt) => {
+              const { locationX } = evt.nativeEvent;
+              const sliderWidth = 200; // Approximate slider width
+              const newAttenuation = Math.max(0, Math.min(1, locationX / sliderWidth));
+              updateHighFreqAttenuation(newAttenuation);
+            }}
+            onResponderMove={(evt) => {
+              const { locationX } = evt.nativeEvent;
+              const sliderWidth = 200; // Approximate slider width
+              const newAttenuation = Math.max(0, Math.min(1, locationX / sliderWidth));
+              updateHighFreqAttenuation(newAttenuation);
+            }}
+          >
+            <TouchableOpacity
+              style={styles.amplitudeButton}
+              onPress={() => {
+                const newValue = Math.max(0.0, highFreqAttenuation - 0.1);
+                updateHighFreqAttenuation(newValue);
+              }}
+            >
+              <Text style={styles.amplitudeButtonText}>-</Text>
+            </TouchableOpacity>
+            <View style={styles.amplitudeTrack}>
+              <View style={[styles.amplitudeBar, { 
+                width: `${highFreqAttenuation * 100}%`,
+                backgroundColor: '#FF6B6B' // Different color for attenuation
+              }]} />
+            </View>
+            <TouchableOpacity
+              style={styles.amplitudeButton}
+              onPress={() => {
+                const newValue = Math.min(1.0, highFreqAttenuation + 0.1);
+                updateHighFreqAttenuation(newValue);
               }}
             >
               <Text style={styles.amplitudeButtonText}>+</Text>
