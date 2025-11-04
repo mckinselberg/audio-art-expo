@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Platform } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Platform, ScrollView } from 'react-native';
 import { Svg, Path } from 'react-native-svg';
 import { Audio } from 'expo-audio';
 
@@ -741,7 +741,7 @@ const useAudioEngine = () => {
 };
 
 // SVG-based waveform visualization component
-const WaveformVisualizer = ({ audioData, onTouch, isPlaying, theme }) => {
+const WaveformVisualizer = ({ audioData, onTouch, isPlaying, theme, onDragStart, onDragEnd, onDragMove }) => {
   const [screenData, setScreenData] = useState(() => {
     const { width, height } = Dimensions.get('window');
     return { width, height };
@@ -872,34 +872,46 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying, theme }) => {
     return pathData;
   };
 
+  // Helper function to calculate frequency from X position
+  const calculateFrequencyFromX = (x) => {
+    const clampedX = Math.max(0, Math.min(dimensions.width, x));
+    const minFreq = 20;
+    const maxFreq = 20000;
+    const logMin = Math.log(minFreq);
+    const logMax = Math.log(maxFreq);
+    const logFreq = logMin + (clampedX / dimensions.width) * (logMax - logMin);
+    return Math.exp(logFreq);
+  };
+
   const handleResponderMove = (event) => {
     if (!isDragging) return;
     
-    const { pageX } = event.nativeEvent;
+    const { pageX, pageY } = event.nativeEvent;
     // Calculate relative X position within the visualizer
     const relativeX = pageX - (event.nativeEvent.target?.offsetLeft || 0);
     
-    console.log('Responder move:', { pageX, relativeX, width: dimensions.width });
-    
     if (!isNaN(relativeX) && isFinite(relativeX)) {
+      const frequency = calculateFrequencyFromX(relativeX);
       onTouch && onTouch(relativeX, 0);
+      onDragMove && onDragMove(pageX, pageY, frequency);
     }
   };
 
   const handleResponderGrant = (event) => {
     setIsDragging(true);
-    const { pageX } = event.nativeEvent;
+    const { pageX, pageY } = event.nativeEvent;
     const relativeX = pageX - (event.nativeEvent.target?.offsetLeft || 0);
     
-    console.log('Responder grant:', { pageX, relativeX });
-    
     if (!isNaN(relativeX) && isFinite(relativeX)) {
+      const frequency = calculateFrequencyFromX(relativeX);
       onTouch && onTouch(relativeX, 0);
+      onDragStart && onDragStart(pageX, pageY, frequency);
     }
   };
 
   const handleResponderRelease = () => {
     setIsDragging(false);
+    onDragEnd && onDragEnd();
   };
 
   return (
@@ -990,6 +1002,20 @@ export default function App() {
     audioData
   } = useAudioEngine();
   const [audioInitialized, setAudioInitialized] = useState(false);
+  
+  // First-time visitor message
+  const [showWelcomeMessage, setShowWelcomeMessage] = useState(true);
+  
+  // Audio status dismissable state
+  const [showAudioStatus, setShowAudioStatus] = useState(true);
+  
+  // Drag tooltip state
+  const [dragTooltip, setDragTooltip] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    frequency: 0
+  });
 
   // Theme system with predefined color schemes
   const themes = [
@@ -1004,6 +1030,9 @@ export default function App() {
 
   const [currentTheme, setCurrentTheme] = useState(0);
   const theme = themes[currentTheme];
+
+  // Get screen dimensions for responsive styling
+  const { width: screenWidth } = Dimensions.get('window');
 
   const handleVisualizerTouch = (x, y) => {
     const { width } = Dimensions.get('window');
@@ -1046,6 +1075,32 @@ export default function App() {
     }
   };
 
+  // Tooltip handlers for drag interaction
+  const handleDragStart = (x, y, frequency) => {
+    setDragTooltip({
+      visible: true,
+      x,
+      y,
+      frequency
+    });
+  };
+
+  const handleDragMove = (x, y, frequency) => {
+    setDragTooltip(prev => ({
+      ...prev,
+      x,
+      y,
+      frequency
+    }));
+  };
+
+  const handleDragEnd = () => {
+    setDragTooltip(prev => ({
+      ...prev,
+      visible: false
+    }));
+  };
+
   const waveTypes = ['sine', 'square', 'sawtooth', 'triangle'];
 
   return (
@@ -1057,30 +1112,108 @@ export default function App() {
         onTouch={handleVisualizerTouch}
         isPlaying={isPlaying}
         theme={theme}
+        onDragStart={handleDragStart}
+        onDragMove={handleDragMove}
+        onDragEnd={handleDragEnd}
       />
       
-      <View style={styles.controls}>
-        {/* Theme Selector */}
-        <View style={styles.themeContainer}>
-          <View style={styles.themeSelector}>
-            {themes.map((themeOption, index) => (
-              <TouchableOpacity
-                key={themeOption.name}
-                style={[
-                  styles.themeCircle,
-                  { backgroundColor: themeOption.primary },
-                  currentTheme === index && styles.themeCircleActive
-                ]}
-                onPress={() => setCurrentTheme(index)}
-              />
-            ))}
+      {/* Frequency Display - positioned top right */}
+      <View style={styles.frequencyOverlay}>
+        <Text style={styles.frequencyOverlayText}>
+          {frequency >= 1000 ? `${(frequency / 1000).toFixed(1)}kHz` : `${Math.round(frequency)}Hz`}
+        </Text>
+      </View>
+      
+      {/* Drag Tooltip */}
+      {dragTooltip.visible && (
+        <View style={[
+          styles.tooltip,
+          {
+            position: 'absolute',
+            left: dragTooltip.x + 10,
+            top: dragTooltip.y - 40,
+            backgroundColor: theme.secondary,
+            borderColor: theme.primary,
+          }
+        ]}>
+          <Text style={[styles.tooltipText, { color: theme.text }]}>
+            {Math.round(dragTooltip.frequency)} Hz
+          </Text>
+        </View>
+      )}
+      
+      {/* Welcome Message */}
+      {showWelcomeMessage && (
+        <View style={styles.welcomeOverlay}>
+          <View style={[
+            styles.welcomeMessage, 
+            { 
+              backgroundColor: theme.background, 
+              borderColor: theme.primary,
+              padding: screenWidth < 768 ? 20 : 24,
+              margin: screenWidth < 768 ? 15 : 20,
+              maxWidth: screenWidth < 768 ? screenWidth - 40 : 400,
+            }
+          ]}>
+            <Text style={[styles.welcomeTitle, { color: theme.primary }]}>
+              Welcome to Audio Art Expo!
+            </Text>
+            <Text style={[styles.welcomeText, { color: 'white' }]}>
+              Tap or click and drag anywhere on the waveform to change the frequency and create your own interactive audio art.
+            </Text>
+            <TouchableOpacity 
+              style={[styles.welcomeButton, { backgroundColor: theme.primary }]}
+              onPress={() => setShowWelcomeMessage(false)}
+            >
+              <Text style={[styles.welcomeButtonText, { color: theme.background }]}>
+                Got it!
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
+      )}
+      
+      <View style={[
+        styles.controls,
+        {
+          padding: 0, // Remove padding from outer container
+          paddingVertical: 0,
+        }
+      ]}>
+        <ScrollView 
+          style={{ flex: 1, width: '100%' }}
+          contentContainerStyle={{
+            padding: screenWidth < 768 ? 10 : 15,
+            paddingVertical: screenWidth < 768 ? 15 : 20,
+            paddingBottom: screenWidth < 768 ? 20 : 25,
+            alignItems: 'center',
+          }}
+          showsVerticalScrollIndicator={true}
+          bounces={true}
+        >
+        
+        {/* Audio Status - dismissable */}
+        {showAudioStatus && (
+          <View style={styles.audioStatusContainer}>
+            <Text style={styles.statusText}>
+              Audio: {audioInitialized ? 'Ready' : 'Not initialized'}
+            </Text>
+            <TouchableOpacity 
+              style={styles.dismissButton}
+              onPress={() => setShowAudioStatus(false)}
+            >
+              <Text style={styles.dismissButtonText}>×</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         
         <TouchableOpacity 
           style={[
             styles.button, 
-            { backgroundColor: isPlaying ? theme.secondary : theme.primary }
+            { 
+              backgroundColor: isPlaying ? theme.secondary : theme.primary,
+              marginBottom: screenWidth < 768 ? 20 : 15
+            }
           ]}
           onPress={handleButtonPress}
         >
@@ -1089,12 +1222,11 @@ export default function App() {
           </Text>
         </TouchableOpacity>
         
-        <Text style={styles.frequencyText}>
-          Frequency: {frequency >= 1000 ? `${(frequency / 1000).toFixed(1)}kHz` : `${Math.round(frequency)}Hz`}
-        </Text>
-        
-        <View style={styles.waveTypeContainer}>
-          <Text style={styles.labelText}>Wave Type:</Text>
+        {/* Wave Type Selector - moved below start button */}
+        <View style={[
+          styles.waveTypeContainer,
+          { marginVertical: screenWidth < 768 ? 8 : 6 }
+        ]}>
           <View style={styles.waveTypeButtons}>
             {waveTypes.map((type) => (
               <TouchableOpacity
@@ -1116,7 +1248,10 @@ export default function App() {
           </View>
         </View>
         
-        <View style={styles.amplitudeContainer}>
+        <View style={[
+          styles.amplitudeContainer,
+          { marginVertical: screenWidth < 768 ? 8 : 6 }
+        ]}>
           <Text style={styles.labelText}>
             Amplitude: {Math.round(amplitude * 100)}%
           </Text>
@@ -1169,7 +1304,10 @@ export default function App() {
           </View>
         </View>
         
-        <View style={styles.amplitudeContainer}>
+        <View style={[
+          styles.amplitudeContainer,
+          { marginVertical: screenWidth < 768 ? 8 : 6 }
+        ]}>
           <Text style={styles.labelText}>
             High Freq Attenuation: {Math.round(highFreqAttenuation * 100)}%
           </Text>
@@ -1217,9 +1355,28 @@ export default function App() {
           </View>
         </View>
         
-        <Text style={styles.statusText}>
-          Audio: {audioInitialized ? 'Ready' : 'Not initialized'}
-        </Text>
+        {/* Theme Selector - moved to bottom */}
+        <View style={[
+          styles.themeContainer,
+          { marginBottom: screenWidth < 768 ? 25 : 20 }
+        ]}>
+          <Text style={styles.labelText}>Theme:</Text>
+          <View style={styles.themeSelector}>
+            {themes.map((themeOption, index) => (
+              <TouchableOpacity
+                key={themeOption.name}
+                style={[
+                  styles.themeCircle,
+                  { backgroundColor: themeOption.primary },
+                  currentTheme === index && styles.themeCircleActive
+                ]}
+                onPress={() => setCurrentTheme(index)}
+              />
+            ))}
+          </View>
+        </View>
+        
+        </ScrollView>
       </View>
     </View>
   );
@@ -1230,7 +1387,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
   },
   visualizer: {
     backgroundColor: '#ccc',
@@ -1238,23 +1395,24 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   controls: {
-    padding: 20,
-    alignItems: 'center',
     backgroundColor: '#000',
+    flex: 1,
+    width: '100%',
+    maxHeight: '40%',
   },
   button: {
     backgroundColor: '#333',
-    paddingHorizontal: 30,
-    paddingVertical: 15,
-    borderRadius: 25,
-    marginBottom: 15,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginBottom: 12,
   },
   buttonActive: {
     backgroundColor: '#007AFF',
   },
   buttonText: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
   },
   themeContainer: {
@@ -1277,10 +1435,14 @@ const styles = StyleSheet.create({
   },
   themeCircleActive: {
     borderColor: 'white',
-    shadowColor: 'white',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 4,
+    ...(Platform.OS === 'web' ? {
+      boxShadow: '0px 0px 4px rgba(255, 255, 255, 0.5)',
+    } : {
+      shadowColor: 'white',
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: 0.5,
+      shadowRadius: 4,
+    }),
     elevation: 5,
   },
   frequencyText: {
@@ -1288,9 +1450,49 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 5,
   },
+  frequencyOverlay: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    zIndex: 100,
+  },
+  frequencyOverlayText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
   statusText: {
     color: '#ccc',
     fontSize: 14,
+  },
+  audioStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#222',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 10,
+    width: '90%',
+  },
+  dismissButton: {
+    backgroundColor: '#444',
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 10,
+  },
+  dismissButtonText: {
+    color: '#ccc',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   labelText: {
     color: 'white',
@@ -1363,5 +1565,67 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     borderRadius: 10,
     minWidth: 2,
+  },
+  tooltip: {
+    backgroundColor: '#333',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    ...(Platform.OS === 'web' ? {
+      boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.25)',
+    } : {
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+    }),
+    elevation: 5,
+    zIndex: 1000,
+  },
+  tooltipText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  welcomeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2000,
+  },
+  welcomeMessage: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 16,
+    borderWidth: 2,
+    padding: 24,
+    margin: 20,
+    maxWidth: 400,
+    alignItems: 'center',
+  },
+  welcomeTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  welcomeText: {
+    fontSize: 16,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 20,
+  },
+  welcomeButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  welcomeButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
