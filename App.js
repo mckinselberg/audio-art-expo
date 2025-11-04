@@ -783,8 +783,8 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying, theme }) => {
       height,
       visualizerHeight,
       isLandscape,
-      // Scale factors for different screen densities
-      amplitudeScale: Math.min(1.5, width / 375), // Base on iPhone SE width
+      // Scale factors for different screen densities - more conservative scaling
+      amplitudeScale: Math.min(1.2, Math.max(0.8, width / 375)), // Scale between 0.8x and 1.2x
       strokeWidth: Math.max(1.5, Math.min(3, width / 200))
     };
   };
@@ -834,8 +834,11 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying, theme }) => {
       
       // Center the waveform and scale it properly with responsive amplitude
       const centerY = visualizerHeight / 2;
-      const baseAmplitude = visualizerHeight * 0.3; // Base amplitude
-      const amplitude = baseAmplitude * amplitudeScale; // Scale for screen size
+      
+      // Improved amplitude calculation for better centering on all screen sizes
+      const maxSafeAmplitude = visualizerHeight * 0.35; // Maximum 35% of height
+      const scaledAmplitude = maxSafeAmplitude * Math.min(amplitudeScale, 1.2); // Limit scaling
+      const amplitude = Math.min(scaledAmplitude, visualizerHeight * 0.4); // Ensure it never exceeds 40%
       
       // Normalize value from 0-255 range to -1 to 1 range, ensuring proper centering
       const normalizedValue = (safeValue - 128) / 127; // Use 127 instead of 128 for symmetric range
@@ -846,12 +849,18 @@ const WaveformVisualizer = ({ audioData, onTouch, isPlaying, theme }) => {
         ? normalizedValue + Math.sin(phaseOffset) * 0.05 // Subtle flow without distorting waveform shape
         : normalizedValue;
       
-      // Ensure the waveform is properly centered around centerY
-      const y = centerY - (animatedValue * amplitude); // Subtract to invert Y axis (SVG coordinates)
+      // Ensure the waveform is properly centered around centerY with safe bounds
+      const rawY = centerY - (animatedValue * amplitude); // Subtract to invert Y axis (SVG coordinates)
       
-      // Ensure x and y are valid numbers and within bounds
+      // Improved bounds checking - keep within safe margins from edges
+      const margin = amplitude * 0.1; // 10% margin
+      const minY = margin;
+      const maxY = visualizerHeight - margin;
+      const y = Math.max(minY, Math.min(maxY, rawY));
+      
+      // Ensure x and y are valid numbers
       const safeX = isNaN(x) || !isFinite(x) ? 0 : Math.max(0, Math.min(width, x));
-      const safeY = isNaN(y) || !isFinite(y) ? centerY : Math.max(0, Math.min(visualizerHeight, y));
+      const safeY = isNaN(y) || !isFinite(y) ? centerY : y;
       
       if (index === 0) {
         pathData += `M ${safeX} ${safeY}`;
