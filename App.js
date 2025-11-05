@@ -10,6 +10,7 @@ const useAudioEngine = () => {
   const [frequency, setFrequency] = useState(440);
   const [waveType, setWaveType] = useState('sine');
   const [amplitude, setAmplitude] = useState(0.3);
+  const [masterVolume, setMasterVolume] = useState(0.7); // Master volume control (0 to 1)
   const [highFreqAttenuation, setHighFreqAttenuation] = useState(0.5); // 0 = no attenuation, 1 = maximum attenuation
   const [audioData, setAudioData] = useState(new Array(1024).fill(128));
   const soundRef = useRef(null);
@@ -18,6 +19,7 @@ const useAudioEngine = () => {
   const audioContextRef = useRef(null);
   const oscillatorRef = useRef(null);
   const gainNodeRef = useRef(null);
+  const masterGainNodeRef = useRef(null); // Master volume gain node
   const analyserRef = useRef(null);
   
   // HTML5 Audio fallback for mobile Safari
@@ -148,13 +150,46 @@ const useAudioEngine = () => {
           if (!audioContextRef.current) {
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
             
+            // Create amplitude gain node (affects visualization)
             gainNodeRef.current = audioContextRef.current.createGain();
             gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
-            gainNodeRef.current.connect(audioContextRef.current.destination);
+            
+            // Create master volume gain node (affects final output only)
+            masterGainNodeRef.current = audioContextRef.current.createGain();
+            masterGainNodeRef.current.gain.setValueAtTime(masterVolume, audioContextRef.current.currentTime);
+            
+            // Connect: gainNode -> masterGainNode -> destination
+            gainNodeRef.current.connect(masterGainNodeRef.current);
+            masterGainNodeRef.current.connect(audioContextRef.current.destination);
           }
           
+          // Enhanced Safari AudioContext resume with retries
           if (audioContextRef.current.state === 'suspended') {
-            await audioContextRef.current.resume();
+            console.log('Safari AudioContext suspended, attempting aggressive resume...');
+            
+            // Try multiple resume attempts for Safari
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                await audioContextRef.current.resume();
+                console.log(`Safari AudioContext resumed on attempt ${attempt}`);
+                
+                // Verify the context is actually running
+                if (audioContextRef.current.state === 'running') {
+                  break;
+                } else {
+                  console.warn(`Safari AudioContext still ${audioContextRef.current.state} after attempt ${attempt}`);
+                  if (attempt < 3) {
+                    // Brief delay before retry
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                  }
+                }
+              } catch (resumeError) {
+                console.warn(`Safari AudioContext resume attempt ${attempt} failed:`, resumeError.message);
+                if (attempt === 3) {
+                  throw resumeError;
+                }
+              }
+            }
           }
         } catch (error) {
           console.warn('Web Audio failed:', error.message);
@@ -164,14 +199,21 @@ const useAudioEngine = () => {
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
           
+          // Create amplitude gain node (affects visualization)
           gainNodeRef.current = audioContextRef.current.createGain();
           gainNodeRef.current.gain.setValueAtTime(0.3, audioContextRef.current.currentTime);
+          
+          // Create master volume gain node (affects final output only)
+          masterGainNodeRef.current = audioContextRef.current.createGain();
+          masterGainNodeRef.current.gain.setValueAtTime(masterVolume, audioContextRef.current.currentTime);
           
           analyserRef.current = audioContextRef.current.createAnalyser();
           analyserRef.current.fftSize = 2048;
           
+          // Connect: gainNode -> analyser -> masterGainNode -> destination
           gainNodeRef.current.connect(analyserRef.current);
-          analyserRef.current.connect(audioContextRef.current.destination);
+          analyserRef.current.connect(masterGainNodeRef.current);
+          masterGainNodeRef.current.connect(audioContextRef.current.destination);
         }
         
         if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
@@ -367,76 +409,139 @@ const useAudioEngine = () => {
           }
           setIsPlaying(false);
         } else {
-          // Standard mobile Safari approach - HTML5 Audio first
+          // Try Web Audio API first, with better Safari handling
           try {
-            // Create audio element in direct user gesture (CRITICAL)
-            const audio = document.createElement('audio');
+            if (!audioContextRef.current) {
+              // Force re-initialization
+              await initAudio();
+            }
             
-            // Generate a simple tone using data URL (standard approach)
-            const duration = 2;
-            const sampleRate = 8000; // Lower sample rate for mobile
-            const frequency = 440;
-            const amplitude = 0.3;
-            
-            // Create WAV header (minimal but valid)
-            const samples = sampleRate * duration;
-            const buffer = new ArrayBuffer(44 + samples * 2);
-            const view = new DataView(buffer);
-            
-            // WAV header
-            const writeString = (offset, string) => {
-              for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
+            // Enhanced Safari AudioContext handling
+            if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+              console.log('Safari: AudioContext suspended before playback, attempting resume...');
+              try {
+                await audioContextRef.current.resume();
+                
+                // Wait and verify the context is truly running
+                await new Promise(resolve => setTimeout(resolve, 50));
+                
+                if (audioContextRef.current.state !== 'running') {
+                  console.warn(`Safari: AudioContext still ${audioContextRef.current.state} after resume`);
+                  // Force a second resume attempt
+                  await audioContextRef.current.resume();
+                }
+                
+                console.log(`Safari: AudioContext state after resume: ${audioContextRef.current.state}`);
+              } catch (resumeError) {
+                console.error('Safari: AudioContext resume failed:', resumeError);
+                throw resumeError;
               }
-            };
-            
-            writeString(0, 'RIFF');
-            view.setUint32(4, 36 + samples * 2, true);
-            writeString(8, 'WAVE');
-            writeString(12, 'fmt ');
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true);
-            view.setUint16(22, 1, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, sampleRate * 2, true);
-            view.setUint16(32, 2, true);
-            view.setUint16(34, 16, true);
-            writeString(36, 'data');
-            view.setUint32(40, samples * 2, true);
-            
-            // Generate sine wave data
-            for (let i = 0; i < samples; i++) {
-              const sample = Math.sin(2 * Math.PI * frequency * i / sampleRate) * amplitude * 32767;
-              view.setInt16(44 + i * 2, sample, true);
             }
             
-            // Create blob and play immediately
-            const blob = new Blob([buffer], { type: 'audio/wav' });
-            const url = URL.createObjectURL(blob);
+            // Use Web Audio API oscillator for real-time control
+            startWebAudioOscillator();
+            setUsingFallbackAudio(false);
             
-            audio.src = url;
-            audio.volume = 0.3;
+          } catch (webAudioError) {
+            console.warn('Safari: Web Audio failed, falling back to HTML5 Audio:', webAudioError.message);
             
-            // CRITICAL: play() must be called synchronously in user gesture
-            const playPromise = audio.play();
-            
-            if (playPromise) {
-              playPromise.then(() => {
+            // Fallback to HTML5 Audio with looping for continuous playback
+            try {
+              // Create audio element in direct user gesture (CRITICAL)
+              const audio = document.createElement('audio');
+              
+              // Generate a looping tone using data URL
+              const duration = 2.0; // Longer for smoother looping
+              const sampleRate = 22050; // Optimized sample rate for Safari
+              const currentFreq = frequency; // Use actual current frequency
+              const currentAmp = amplitude * 0.4; // Slightly reduce amplitude for Safari
+              
+              // Create WAV header (minimal but valid)
+              const samples = sampleRate * duration;
+              const buffer = new ArrayBuffer(44 + samples * 2);
+              const view = new DataView(buffer);
+              
+              // WAV header
+              const writeString = (offset, string) => {
+                for (let i = 0; i < string.length; i++) {
+                  view.setUint8(offset + i, string.charCodeAt(i));
+                }
+              };
+              
+              writeString(0, 'RIFF');
+              view.setUint32(4, 36 + samples * 2, true);
+              writeString(8, 'WAVE');
+              writeString(12, 'fmt ');
+              view.setUint32(16, 16, true);
+              view.setUint16(20, 1, true);
+              view.setUint16(22, 1, true);
+              view.setUint32(24, sampleRate, true);
+              view.setUint32(28, sampleRate * 2, true);
+              view.setUint16(32, 2, true);
+              view.setUint16(34, 16, true);
+              writeString(36, 'data');
+              view.setUint32(40, samples * 2, true);
+              
+              // Generate waveform data using current settings with volume compensation
+              const compensation = getVolumeCompensation(waveType, currentFreq);
+              const adjustedAmp = currentAmp * compensation;
+              
+              for (let i = 0; i < samples; i++) {
+                const t = i / sampleRate;
+                let sample;
+                
+                // Generate waveform based on current type
+                switch (waveType) {
+                  case 'square':
+                    sample = Math.sin(2 * Math.PI * currentFreq * t) >= 0 ? 1 : -1;
+                    break;
+                  case 'sawtooth':
+                    sample = 2 * (currentFreq * t - Math.floor(currentFreq * t + 0.5));
+                    break;
+                  case 'triangle':
+                    sample = 2 * Math.abs(2 * (currentFreq * t - Math.floor(currentFreq * t + 0.5))) - 1;
+                    break;
+                  default: // sine
+                    sample = Math.sin(2 * Math.PI * currentFreq * t);
+                }
+                
+                // Apply amplitude and convert to 16-bit PCM
+                const pcmSample = sample * adjustedAmp * 32767;
+                view.setInt16(44 + i * 2, Math.max(-32767, Math.min(32767, pcmSample)), true);
+              }
+              
+              // Create blob and set up looping
+              const blob = new Blob([buffer], { type: 'audio/wav' });
+              const url = URL.createObjectURL(blob);
+              
+              audio.src = url;
+              audio.loop = true; // Enable looping for continuous playback
+              // Apply master volume to HTML5 Audio element
+              audio.volume = Math.max(0, Math.min(1, masterVolume * 0.5)); // Cap at 50% for Safari safety
+              
+              // CRITICAL: play() must be called synchronously in user gesture
+              const playPromise = audio.play();
+              
+              if (playPromise) {
+                playPromise.then(() => {
+                  audioElementRef.current = audio;
+                  setUsingFallbackAudio(true);
+                  setIsPlaying(true);
+                  console.log('Safari: HTML5 Audio with looping started successfully');
+                }).catch(error => {
+                  console.warn('Safari: HTML5 Audio play failed:', error.message);
+                  URL.revokeObjectURL(url);
+                });
+              } else {
                 audioElementRef.current = audio;
+                setUsingFallbackAudio(true);
                 setIsPlaying(true);
-              }).catch(error => {
-                console.warn('HTML5 Audio play failed:', error.message);
-                // Fallback to Web Audio
-                tryWebAudioFallback();
-              });
-            } else {
-              audioElementRef.current = audio;
-              setIsPlaying(true);
+              }
+              
+            } catch (fallbackError) {
+              console.error('Safari: All audio methods failed:', fallbackError.message);
+              throw fallbackError;
             }
-            
-          } catch (error) {
-            console.warn('HTML5 Audio creation failed:', error.message);
-            tryWebAudioFallback();
           }
         }
       } else {
@@ -455,9 +560,26 @@ const useAudioEngine = () => {
           console.log('Audio stopped');
         } else {
           if (shouldUseWebAudio()) {
+            // Enhanced Safari AudioContext handling
             if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-              await audioContextRef.current.resume();
-              console.log('AudioContext aggressively resumed before playback');
+              console.log('Safari: AudioContext suspended before playback, attempting resume...');
+              try {
+                await audioContextRef.current.resume();
+                
+                // Wait and verify the context is truly running
+                await new Promise(resolve => setTimeout(resolve, 50));
+                
+                if (audioContextRef.current.state !== 'running') {
+                  console.warn(`Safari: AudioContext still ${audioContextRef.current.state} after resume`);
+                  // Force a second resume attempt
+                  await audioContextRef.current.resume();
+                }
+                
+                console.log(`Safari: AudioContext state after resume: ${audioContextRef.current.state}`);
+              } catch (resumeError) {
+                console.error('Safari: AudioContext resume failed:', resumeError);
+                throw resumeError;
+              }
             }
             startWebAudioOscillator();
           } else {
@@ -502,6 +624,106 @@ const useAudioEngine = () => {
     }
   };
 
+  // Function to regenerate Safari HTML5 Audio with new parameters
+  const regenerateSafariAudio = async () => {
+    if (!usingFallbackAudio || !audioElementRef.current || !isPlaying) {
+      return;
+    }
+    
+    try {
+      console.log('Safari: Regenerating audio with new parameters');
+      
+      // Stop current audio
+      audioElementRef.current.pause();
+      const oldUrl = audioElementRef.current.src;
+      
+      // Generate new audio with current parameters
+      const duration = 2.0;
+      const sampleRate = 22050;
+      const currentFreq = frequency;
+      const currentAmp = amplitude * 0.4;
+      
+      const samples = sampleRate * duration;
+      const buffer = new ArrayBuffer(44 + samples * 2);
+      const view = new DataView(buffer);
+      
+      // WAV header
+      const writeString = (offset, string) => {
+        for (let i = 0; i < string.length; i++) {
+          view.setUint8(offset + i, string.charCodeAt(i));
+        }
+      };
+      
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + samples * 2, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeString(36, 'data');
+      view.setUint32(40, samples * 2, true);
+      
+      // Generate waveform with current parameters
+      const compensation = getVolumeCompensation(waveType, currentFreq);
+      const adjustedAmp = currentAmp * compensation;
+      
+      for (let i = 0; i < samples; i++) {
+        const t = i / sampleRate;
+        let sample;
+        
+        switch (waveType) {
+          case 'square':
+            sample = Math.sin(2 * Math.PI * currentFreq * t) >= 0 ? 1 : -1;
+            break;
+          case 'sawtooth':
+            sample = 2 * (currentFreq * t - Math.floor(currentFreq * t + 0.5));
+            break;
+          case 'triangle':
+            sample = 2 * Math.abs(2 * (currentFreq * t - Math.floor(currentFreq * t + 0.5))) - 1;
+            break;
+          default: // sine
+            sample = Math.sin(2 * Math.PI * currentFreq * t);
+        }
+        
+        const pcmSample = sample * adjustedAmp * 32767;
+        view.setInt16(44 + i * 2, Math.max(-32767, Math.min(32767, pcmSample)), true);
+      }
+      
+      // Create new audio
+      const blob = new Blob([buffer], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      
+      const newAudio = document.createElement('audio');
+      newAudio.src = url;
+      newAudio.loop = true;
+      newAudio.volume = Math.max(0, Math.min(1, masterVolume * 0.5));
+      
+      // Start new audio and cleanup old
+      const playPromise = newAudio.play();
+      if (playPromise) {
+        playPromise.then(() => {
+          audioElementRef.current = newAudio;
+          URL.revokeObjectURL(oldUrl);
+          console.log('Safari: Audio regenerated successfully');
+        }).catch(error => {
+          console.warn('Safari: Audio regeneration failed:', error);
+          URL.revokeObjectURL(url);
+        });
+      } else {
+        audioElementRef.current = newAudio;
+        URL.revokeObjectURL(oldUrl);
+      }
+      
+    } catch (error) {
+      console.error('Safari: Audio regeneration error:', error);
+    }
+  };
+
   const updateFrequency = async (newFreq) => {
     // Validate frequency value
     if (isNaN(newFreq) || !isFinite(newFreq) || newFreq < 20 || newFreq > 20000) {
@@ -514,6 +736,9 @@ const useAudioEngine = () => {
     
     if (shouldUseWebAudio() && isPlaying) {
       updateWebAudioOscillator();
+    } else if (usingFallbackAudio && isPlaying) {
+      // Regenerate Safari audio with new frequency
+      await regenerateSafariAudio();
     }
     
     // Update visualization
@@ -546,6 +771,9 @@ const useAudioEngine = () => {
         startWebAudioOscillator(newType);
         waveformSwitchTimeoutRef.current = null; // Clear reference after execution
       }, 20);
+    } else if (usingFallbackAudio && isPlaying) {
+      // Regenerate Safari audio with new wave type
+      await regenerateSafariAudio();
     }
     
     // Update visualization
@@ -585,6 +813,9 @@ const useAudioEngine = () => {
       } catch (error) {
         console.error('Error setting gain:', error);
       }
+    } else if (usingFallbackAudio && isPlaying) {
+      // Regenerate Safari audio with new amplitude
+      regenerateSafariAudio();
     } else {
       console.log('Skipping gain update - web:', Platform.OS === 'web', 'gainNode:', !!gainNodeRef.current, 'audioContext:', !!audioContextRef.current);
     }
@@ -621,6 +852,38 @@ const useAudioEngine = () => {
     // Update visualization
     const waveformData = generateWaveform(frequency, waveType, amplitude);
     setAudioData(waveformData);
+  };
+
+  const updateMasterVolume = async (newVolume) => {
+    // Validate volume value (0 to 1)
+    if (isNaN(newVolume) || !isFinite(newVolume)) {
+      console.warn('Invalid master volume:', newVolume);
+      return;
+    }
+    
+    const clampedVolume = Math.max(0, Math.min(1, newVolume));
+    setMasterVolume(clampedVolume);
+    console.log('Master volume updated:', clampedVolume);
+    
+    // Update Web Audio master gain immediately if playing
+    if (Platform.OS === 'web' && masterGainNodeRef.current && audioContextRef.current) {
+      try {
+        masterGainNodeRef.current.gain.setValueAtTime(clampedVolume, audioContextRef.current.currentTime);
+        console.log('Master gain updated:', clampedVolume);
+      } catch (error) {
+        console.error('Error updating master gain:', error);
+      }
+    }
+    
+    // For HTML5 Audio fallback (mobile Safari), update element volume
+    if (usingFallbackAudio && audioElementRef.current) {
+      try {
+        audioElementRef.current.volume = clampedVolume;
+        console.log('HTML5 Audio volume updated:', clampedVolume);
+      } catch (error) {
+        console.error('Error updating HTML5 Audio volume:', error);
+      }
+    }
   };
 
   // Update real-time audio data from analyser
@@ -730,11 +993,13 @@ const useAudioEngine = () => {
     updateFrequency,
     updateWaveType,
     updateAmplitude,
+    updateMasterVolume,
     updateHighFreqAttenuation,
     isPlaying,
     frequency,
     waveType,
     amplitude,
+    masterVolume,
     highFreqAttenuation,
     audioData
   };
@@ -993,15 +1258,49 @@ export default function App() {
     updateFrequency, 
     updateWaveType, 
     updateAmplitude,
+    updateMasterVolume,
     updateHighFreqAttenuation,
     isPlaying, 
     frequency, 
     waveType,
     amplitude,
+    masterVolume,
     highFreqAttenuation,
     audioData
   } = useAudioEngine();
   const [audioInitialized, setAudioInitialized] = useState(false);
+  
+  // Safari-specific audio initialization state
+  const [needsAudioInit, setNeedsAudioInit] = useState(false);
+  const [isSafari, setIsSafari] = useState(false);
+  
+  // Check if this is Safari on page load
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const userAgent = navigator.userAgent;
+      const isWebkitSafari = /Safari/.test(userAgent) && /WebKit/.test(userAgent) && !/Chrome/.test(userAgent);
+      const isMobileSafari = /iPad|iPhone|iPod/.test(userAgent) && !window.MSStream;
+      const safariDetected = isWebkitSafari || isMobileSafari;
+      
+      setIsSafari(safariDetected);
+      
+      if (safariDetected) {
+        // Safari requires user interaction for audio
+        setNeedsAudioInit(true);
+      }
+    }
+  }, []);
+  
+  // Safari audio initialization handler
+  const handleSafariAudioInit = async () => {
+    try {
+      await initAudio();
+      setNeedsAudioInit(false);
+      setAudioInitialized(true);
+    } catch (error) {
+      console.error('Safari audio initialization failed:', error);
+    }
+  };
   
   // First-time visitor message
   const [showWelcomeMessage, setShowWelcomeMessage] = useState(true);
@@ -1106,6 +1405,44 @@ export default function App() {
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
+      
+      {/* Safari Audio Initialization Button */}
+      {isSafari && needsAudioInit && (
+        <View style={[
+          styles.safariInitOverlay,
+          { backgroundColor: `${theme.primary}E6` } // Semi-transparent overlay
+        ]}>
+          <View style={[
+            styles.safariInitCard,
+            { 
+              backgroundColor: '#1A1A1A',
+              borderColor: theme.primary,
+            }
+          ]}>
+            <Text style={[styles.safariInitTitle, { color: theme.primary }]}>
+              Audio Setup Required
+            </Text>
+            <Text style={styles.safariInitText}>
+              Safari requires a manual step to enable audio. 
+              Tap the button below to initialize the audio system.
+            </Text>
+            <TouchableOpacity
+              style={[
+                styles.safariInitButton,
+                { 
+                  backgroundColor: theme.primary,
+                  borderColor: theme.secondary,
+                }
+              ]}
+              onPress={handleSafariAudioInit}
+            >
+              <Text style={styles.safariInitButtonText}>
+                Enable Audio
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
       
       <WaveformVisualizer 
         audioData={audioData}
@@ -1348,6 +1685,58 @@ export default function App() {
               onPress={() => {
                 const newValue = Math.min(1.0, highFreqAttenuation + 0.1);
                 updateHighFreqAttenuation(newValue);
+              }}
+            >
+              <Text style={styles.amplitudeButtonText}>+</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        
+        {/* Master Volume Control */}
+        <View style={[
+          styles.amplitudeContainer,
+          { marginVertical: screenWidth < 768 ? 8 : 6 }
+        ]}>
+          <Text style={styles.labelText}>
+            Master Volume: {Math.round(masterVolume * 100)}%
+          </Text>
+          <View 
+            style={styles.amplitudeSlider}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={(evt) => {
+              const { locationX } = evt.nativeEvent;
+              const sliderWidth = 200; // Approximate slider width
+              const newVolume = Math.max(0, Math.min(1, locationX / sliderWidth));
+              updateMasterVolume(newVolume);
+            }}
+            onResponderMove={(evt) => {
+              const { locationX } = evt.nativeEvent;
+              const sliderWidth = 200; // Approximate slider width
+              const newVolume = Math.max(0, Math.min(1, locationX / sliderWidth));
+              updateMasterVolume(newVolume);
+            }}
+          >
+            <TouchableOpacity
+              style={styles.amplitudeButton}
+              onPress={() => {
+                const newValue = Math.max(0.0, masterVolume - 0.1);
+                updateMasterVolume(newValue);
+              }}
+            >
+              <Text style={styles.amplitudeButtonText}>-</Text>
+            </TouchableOpacity>
+            <View style={styles.amplitudeTrack}>
+              <View style={[styles.amplitudeBar, { 
+                width: `${masterVolume * 100}%`,
+                backgroundColor: theme.accent // Use accent theme color for distinction
+              }]} />
+            </View>
+            <TouchableOpacity
+              style={styles.amplitudeButton}
+              onPress={() => {
+                const newValue = Math.min(1.0, masterVolume + 0.1);
+                updateMasterVolume(newValue);
               }}
             >
               <Text style={styles.amplitudeButtonText}>+</Text>
@@ -1627,5 +2016,56 @@ const styles = StyleSheet.create({
   welcomeButtonText: {
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  safariInitOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 3000, // Higher than welcome message
+  },
+  safariInitCard: {
+    borderRadius: 16,
+    borderWidth: 2,
+    padding: 24,
+    margin: 20,
+    maxWidth: 380,
+    alignItems: 'center',
+  },
+  safariInitTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  safariInitText: {
+    fontSize: 16,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 24,
+    color: '#CCCCCC',
+  },
+  safariInitButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    elevation: 3,
+    ...(Platform.OS === 'web' ? {
+      boxShadow: '0px 2px 6px rgba(0, 0, 0, 0.3)',
+    } : {
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.3,
+      shadowRadius: 6,
+    }),
+  },
+  safariInitButtonText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
   },
 });
