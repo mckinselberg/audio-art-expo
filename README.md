@@ -2,6 +2,8 @@
 
 An immersive, cross-platform audio-visual art experience built with React Native and Expo. Create beautiful, real-time audio synthesis with interactive waveform visualization that responds to your touch.
 
+🌐 **[Live Demo](https://audio-art.onrender.com/)** - Try it now in your browser!
+
 ![Audio Art Platform Demo](https://via.placeholder.com/800x400/1a1a1a/007AFF?text=Interactive+Audio+Art+Platform)
 
 ## ✨ Features
